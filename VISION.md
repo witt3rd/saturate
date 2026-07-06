@@ -1,133 +1,198 @@
 # Saturate — Vision
 
+## The Problem
+
+Loop engineering is having a moment. The pattern is everywhere: an agent
+generates a hypothesis, applies it, measures the result, keeps or reverts, and
+repeats. Metric-driven, autonomous, continuous improvement toward a declared
+goal. It works. Teams are shipping real results with it.
+
+But every implementation runs the same way: **one orchestrator, sub-agents, one
+machine.** The loop lives on a single box. When it stalls, you restart it. When
+you want to run two loops, you open another terminal. When you want to run a
+hundred loops across your engineering organization's idle compute — you're on
+your own.
+
+That is the gap Saturate fills.
+
+---
+
 ## The Thesis
 
-The world moved to GPU and forgot about CPU.
+**Current loop engineering scales down. Saturate scales up.**
 
-The accelerator narrative is correct for inference throughput. But autonomous
-agentic work — hypothesis generation, code synthesis, research coordination,
-measurement, git operations — is **CPU and network bound**, not GPU bound.
-Inference tokens come from APIs or from whichever node has a GPU; what starves
-is the orchestration layer wrapping them: Python coordination, subprocess
-execution, file I/O, tool calls, iterative decision-making. A seven-machine
-fleet with mostly-idle CPU cores is seven machines that could be running useful
-work right now.
+The same loop spec that runs on your laptop today runs across a thousand nodes
+tomorrow — without re-architecture, without rewriting your agents, without
+learning a new framework. You declare goals. Saturate keeps the fleet running
+toward them, continuously, at whatever scale you have.
 
-Saturate is the infrastructure that keeps them running it.
+And here is the insight the GPU narrative buried: **most agentic loops don't
+need a GPU.** They coordinate, call frontier AI APIs (Claude, GPT, Gemini),
+execute tools, measure results. That is CPU work and network I/O. GPU is one
+scheduling characteristic for the minority of loops that need local inference.
+The bottleneck the field is ignoring is CPU capacity — and across any
+organization, it is enormous and almost entirely idle.
 
 ---
 
-## The Unit of Work: A Loop
+## What Saturate Is
 
-The unit of work in Saturate is not a task. It is a **loop** — a goal, a
-metric, a hypothesis engine, and a terminal condition, running until externally
-stopped or until it finds a plateau.
+Saturate is an **open source distributed loop execution fabric**.
+
+You define a loop goal — what you are optimizing, how to measure it, when to
+stop. Saturate schedules that loop onto available compute, runs the
+hypothesis/measure/keep-or-revert cycle, tracks every iteration, manages
+failures and retries, and keeps the fleet saturated with useful work toward
+your declared goals.
 
 ```
-define goal + baseline metric
-loop until stopped:
-    generate hypothesis       →  agent proposes a change
-    apply tentatively         →  try it
-    measure                   →  did the metric improve?
-    correctness gate          →  did it break anything?
-    better AND correct?       →  commit, advance baseline
-    else                      →  revert, record the dead end
+define goal + metric
+submit loop spec
+              ↓
+   Saturate schedules across fleet
+              ↓
+   loop runs: hypothesis → apply → measure → keep/revert → repeat
+              ↓
+   terminal condition hit → harvest output → spawn follow-on loops?
+              ↓
+   fleet picks up the next pending loop
 ```
 
-This is the **autoresearch** pattern (Karpathy / Shopify shape): continuous,
-autonomous improvement toward a declared objective, with deterministic
-measurement and automatic rollback. Not a one-shot prompt. Not a plan with
-finite tasks. A loop that runs in the background, making incremental progress,
-filing every dead end in the audit trail.
-
-Loops are the right unit because they map to how real research and engineering
-work actually proceeds: iterative hypothesis testing, continuous improvement,
-gradual convergence toward a goal that was always a direction rather than a
-destination.
+The fleet never idles as long as there is work to do.
 
 ---
 
-## The Goal Registry
+## The Loop Is the Unit of Work
 
-Objectives are declared explicitly: reduce the build time of this project;
-survey this research area and surface relevant findings; continuously refine
-this codebase toward a quality threshold; explore this problem space and
-generate candidate implementations.
+Not a task. Not a job. A **loop** — self-contained, iterating, measuring,
+rolling back bad hypotheses, running until it hits a declared terminal
+condition:
 
-Each objective becomes a loop specification. The **goal registry** is the set
-of active objectives. Saturate's job is to keep the fleet running loops toward
-those objectives at all times — dispatching new loops when nodes go idle,
-reaping stalled ones, harvesting completed work.
+| Terminal state | Meaning |
+|---|---|
+| `success` | Optional target threshold reached |
+| `stalled` | N consecutive turns with no accepted improvement |
+| `exhausted` | Hard iteration or budget ceiling hit |
+| `blocked` | Unresolvable dependency |
+| `cancelled` | Operator stopped it |
+
+Loops spawn child loops. A literature survey loop that completes might spawn
+three refinement loops on its most promising threads. A build-optimization loop
+that plateaus might spawn a goal-decomposition loop to find a better angle. The
+fleet self-directs toward the declared objectives.
 
 ---
 
-## The Meta-Loop
+## The Scale Spectrum
 
-Saturate itself is a loop — the **meta-loop** — that orchestrates all the
-others.
+The same loop spec runs at every scale. You decide how much compute to bring:
+
+| Scale | Setup | Loops |
+|---|---|---|
+| Solo developer, one machine | `saturate start` | tens |
+| Home lab or small team | Tailscale mesh, a few nodes | hundreds |
+| Engineering organization | Fleet of workstations + cloud VMs | thousands |
+
+No re-architecture between levels. No rewriting your agents. Add a node,
+it joins the fleet. Remove one, in-flight work is reclaimed and rescheduled.
+
+---
+
+## What Saturate Is Not
+
+**Not a workflow orchestrator** (Temporal, Airflow, Prefect). Those manage
+deterministic task DAGs for business logic that must complete exactly once.
+Saturate runs non-converging metric-optimization loops that run until
+externally stopped. Different problem, different design.
+
+**Not a distributed ML training framework** (Ray, Horovod). Those pool GPU
+capacity across nodes for a single large model run. Saturate routes independent
+loops to individual nodes. It does not aggregate resources across nodes for one
+workload.
+
+**Not tied to any specific agent framework**. Saturate defines a loop spec
+format and a four-operation API. Anything that produces a conforming spec can
+submit work: [oh-my-hermes](https://github.com/witt3rd/oh-my-hermes), a shell
+script, a Python function, a custom agent framework. Saturate runs it.
+
+---
+
+## The Interface
+
+Saturate exposes four operations. Any tool that implements these can act as a
+worker; any tool that calls `post()` can submit work:
 
 ```
-while True:
-    survey active loops         →  what's running, what's stalled, what completed
-    harvest completed loops     →  collect output, spawn follow-on loops
-    find idle CPU capacity      →  which nodes are underutilized
-    select and dispatch         →  match pending loops to available nodes
-    sleep and repeat
+post(loop_spec)    →  submit a loop to the queue
+claim()            →  a worker atomically claims the next available loop
+write_state(item)  →  record iteration progress
+complete(item)     →  mark terminal, attach output and metadata
 ```
 
-New loops enter the fleet two ways: submitted directly by the human (new goal),
-or **spawned by a running loop** that discovered a sub-problem worth pursuing.
-A literature-survey loop that completes might spawn three refinement loops on
-the most promising threads. A loop that plateaus might spawn a
-goal-decomposition loop to find a better angle. The fleet self-perpetuates
-toward the declared objectives.
+Workers are external processes — arbitrary executables, Python scripts,
+compiled binaries. Saturate launches them, tracks them, recovers from their
+crashes. Workers do not import a Saturate SDK.
 
 ---
 
-## The Design Layer: OMH
+## The Loop Spec
 
-Running a loop is the easy part. **Designing a loop worth running is the hard
-part** — and it is exactly the class of problem OMH exists to solve.
+A loop is declared in a plain YAML file. Any tool can produce one:
 
-[oh-my-hermes](https://github.com/witt3rd/oh-my-hermes) is the deliberation
-layer that produces loop specifications. Its `omh-loop-design` skill runs a
-structured adversarial conversation — Socratic goal extraction, verification
-strategy, terminal state definitions, blast-radius review, critic challenge —
-and produces a `<name>-loop.md` spec that any OMH execution path can run.
+```yaml
+name:           build-optimizer
+goal:           Reduce CI build time by at least 20%
+metric:
+  command:      npm run build
+  extract:      wall_clock
+  direction:    minimize
+correctness:
+  command:      npm test
+max_turns:      100
+budget_tokens:  500000
+stagnation_n:   10
+terminal_states: [success, stalled, exhausted]
+memory:         ./output/build-optimizer/
+```
 
-**OMH designs loops. Saturate runs them.** The handoff is a file.
-
-The two projects form a complete arc: deliberation upstream (OMH), execution
-and distribution downstream (Saturate). Neither duplicates the other's job.
-
----
-
-## The Continuum Connection
-
-Saturate is the **compute fabric**. [Continuum](https://github.com/witt3rd/continuum)
-is the **cognitive presence** that can direct it.
-
-A running Continuum instance — a persistent cognitive loop with a goal survey,
-fleet awareness, and judgment about what to spawn next — is a natural fit for
-the meta-loop role. Saturate exposes a clean interface (loop spec files in,
-harvested output files out, Kanban for state). Continuum can drive that
-interface, or the meta-loop can run standalone. The two projects compose without
-coupling.
+Saturate reads this spec, manages the execution, and writes findings to
+`memory`. The spec is immutable during execution — Saturate never modifies it.
 
 ---
 
-## What Success Looks Like
+## Who Is This For
 
-You wake up. The fleet ran overnight. Your build is 12% faster. Your research
-queue has 40 new findings tagged and summarized. Three candidate implementations
-of the feature you care about were tried, measured, and the best one committed.
-The loops that hit plateaus filed their findings and stopped cleanly. The nodes
-that finished their loops spawned new ones from the completed work.
+**Individual engineers** running multi-day optimization loops on their own
+hardware without babysitting a terminal.
 
-Zero idle cycles. Continuous progress. **You stayed the engineer** — you
-declared the goals and reviewed the output. The loops did the work.
+**Small teams** who want to saturate idle workstations with continuous research,
+code synthesis, or experiment-design loops overnight.
+
+**Engineering organizations** who want to run hundreds of concurrent autonomous
+improvement loops across their fleet — build optimization, test synthesis,
+documentation generation, security scanning — all running continuously toward
+declared quality goals.
+
+**Agent framework builders** who want a battle-tested, open source execution
+backend for loop-shaped workloads without building distributed infrastructure
+from scratch.
 
 ---
 
-*CPU is the underutilized resource. Loops are the unit of work. Goals are the
-direction. Saturate is the fabric that keeps them connected.*
+## Why Now
+
+Three things converged in 2026:
+
+1. **Loop engineering proved out.** The hypothesis/measure/keep-or-revert
+   pattern produces real results on real codebases. It is no longer speculative.
+
+2. **Frontier AI became an API.** Most loops call Claude, GPT, or Gemini.
+   They do not need local GPU. They need CPU to coordinate and network to call
+   the API. The compute sitting idle in every engineering organization is
+   sufficient.
+
+3. **Nobody built the distributed layer.** Every loop engineering system today
+   is single-machine. The distributed execution problem is unsolved and the
+   opportunity is wide open.
+
+Saturate is the distributed layer.
