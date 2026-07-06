@@ -45,6 +45,287 @@ monitors them, and recovers from their crashes.
 
 ---
 
+## The Loop Taxonomy
+
+**Types are semantic.** A `ConsensusLoopSpec` is not a `MetricOptimizationSpec`.
+A function that accepts one cannot be passed the other. A runner that handles
+`Accepted | Discarded` turn results cannot be confused with one that handles
+`ConsensusReached | RoundComplete | Deadlocked`. The kind is not a string tag —
+it shapes every other type in the system.
+
+### Loop Kinds (sealed hierarchy)
+
+```python
+# Sealed — no other subclasses permitted
+class LoopKind: pass
+
+class MetricOptimizationKind(LoopKind): pass  # hypothesis → measure → keep/revert
+class ConsensusKind(LoopKind):          pass  # agents deliberate until agreement
+class TaskExecutionKind(LoopKind):      pass  # tasks executed until plan verified
+class InformationSeekingKind(LoopKind): pass  # search until gaps close
+class ClarificationKind(LoopKind):
+    HUMAN_GATED: ClassVar[bool] = True        # only human call to complete() ends this
+class SelectionKind(LoopKind):          pass  # spawn N candidates, keep top-k, repeat
+
+# Structural (non-loop) task kinds
+class BatchKind: pass   # fan-out to parallel workers, collect and synthesize
+class OnceKind:  pass   # single execution to completion
+
+TaskKind = Union[LoopKind, BatchKind, OnceKind]
+```
+
+### Per-Kind Spec Types
+
+Each kind has a spec type that carries exactly the fields required to run it.
+Producers must supply a typed spec — not a generic YAML blob.
+
+```python
+@dataclass(frozen=True)
+class MetricOptimizationSpec:
+    goal:           str
+    metric:         MetricSpec         # command, extract mode, direction, baseline
+    correctness:    CorrectnessSpec    # command that must pass after every hypothesis
+    max_turns:      int
+    stagnation_n:   int
+    budget_tokens:  Optional[int]
+    memory:         str                # output directory
+    spawn:          Optional[SpawnPolicy]
+
+@dataclass(frozen=True)
+class ConsensusSpec:
+    goal:               str
+    roles:              List[Role]     # e.g. [Planner, Architect, Critic]
+    max_rounds:         int
+    consensus_fn:       ConsensusFn   # e.g. AllApprove | MajorityApprove
+    memory:             str
+
+@dataclass(frozen=True)
+class TaskExecutionSpec:
+    plan_source:        str            # path to plan file
+    max_iterations:     int
+    circuit_breaker_n:  int            # consecutive same-error → block task
+    memory:             str
+
+@dataclass(frozen=True)
+class InformationSeekingSpec:
+    question:           str
+    max_iterations:     int
+    sufficiency_fn:     SufficiencyFn  # evaluator that judges "enough evidence"
+    memory:             str
+
+@dataclass(frozen=True)
+class ClarificationSpec:
+    dimensions:         List[Dimension]
+    coverage_threshold: CoverageLevel
+    max_rounds:         int
+    memory:             str
+    # No sufficiency_fn — terminal condition is always human-confirmed
+
+@dataclass(frozen=True)
+class SelectionSpec:
+    goal:               str
+    population_size:    int
+    selection_k:        int            # survivors carried to next generation
+    fitness_spec:       FitnessSpec    # command + extraction + direction
+    max_generations:    int
+    memory:             str
+    spawn:              Optional[SpawnPolicy]
+
+LoopSpec = Union[
+    MetricOptimizationSpec,
+    ConsensusSpec,
+    TaskExecutionSpec,
+    InformationSeekingSpec,
+    ClarificationSpec,
+    SelectionSpec,
+]
+```
+
+### Per-Kind Turn Result Algebras
+
+Each kind's runner returns a typed result. Pattern-match is exhaustive —
+the compiler (or type checker) forces handling every case.
+
+```python
+# MetricOptimizationKind
+@dataclass(frozen=True)
+class Accepted:
+    hypothesis:     str
+    previous_value: float
+    new_value:      float
+
+@dataclass(frozen=True)
+class Discarded:
+    hypothesis:     str
+    reason:         DiscardReason
+
+@dataclass(frozen=True)
+class Regressed:  previous_value: float; observed_value: float
+@dataclass(frozen=True)
+class Crashed:    exit_code: int;        stderr: str
+@dataclass(frozen=True)
+class Unchanged:  observed_value: float; noise_threshold: float
+
+DiscardReason       = Union[Regressed, Crashed, Unchanged]
+MetricTurnResult    = Union[Accepted, Discarded]
+
+# ConsensusKind
+@dataclass(frozen=True)
+class RoundComplete:
+    round:    int
+    verdicts: Dict[Role, Verdict]   # Approve | RequestChanges | Reject
+
+@dataclass(frozen=True)
+class ConsensusReached:
+    proposal: str
+    rounds:   int
+
+ConsensusTurnResult = Union[RoundComplete, ConsensusReached]
+
+# TaskExecutionKind
+@dataclass(frozen=True)
+class TaskPassed:   task_id: str; learning: str
+@dataclass(frozen=True)
+class TaskFailed:   task_id: str; error_fingerprint: ErrorFingerprint
+@dataclass(frozen=True)
+class TaskBlocked:  task_id: str; reason: str
+@dataclass(frozen=True)
+class AllTasksPassed: summary: str
+
+TaskTurnResult = Union[TaskPassed, TaskFailed, TaskBlocked, AllTasksPassed]
+
+# InformationSeekingKind
+@dataclass(frozen=True)
+class FindingsAdded:  new_findings: List[Finding]; remaining_gaps: List[Gap]
+@dataclass(frozen=True)
+class Sufficient:     findings: List[Finding]
+
+InformationTurnResult = Union[FindingsAdded, Sufficient]
+
+# ClarificationKind
+@dataclass(frozen=True)
+class CoverageUpdated: dimension: Dimension; new_level: CoverageLevel
+@dataclass(frozen=True)
+class HumanConfirmed:  spec: str
+
+ClarificationTurnResult = Union[CoverageUpdated, HumanConfirmed]
+
+# SelectionKind
+@dataclass(frozen=True)
+class GenerationComplete:
+    generation:    int
+    survivors:     List[Candidate]   # top-k by fitness
+    best_fitness:  float
+
+@dataclass(frozen=True)
+class Converged:
+    best_candidate: Candidate
+    generations:    int
+
+SelectionTurnResult = Union[GenerationComplete, Converged]
+```
+
+### Per-Kind Terminal State Algebras
+
+Terminal states carry the evidence that explains *why* the loop ended.
+
+```python
+# MetricOptimizationKind
+@dataclass(frozen=True)
+class MetricSuccess:   achieved_value: float; turns: int
+@dataclass(frozen=True)
+class MetricStalled:   best_value: float; stagnation_count: int
+@dataclass(frozen=True)
+class MetricExhausted: best_value: float; turns_used: int; budget_used: int
+
+MetricTerminal = Union[MetricSuccess, MetricStalled, MetricExhausted, Blocked, Cancelled]
+
+# ConsensusKind
+@dataclass(frozen=True)
+class ConsensusTerminalReached:  proposal: str; rounds: int
+@dataclass(frozen=True)
+class Deadlocked:                rounds: int; final_verdicts: Dict[Role, Verdict]
+
+ConsensusTerminal = Union[ConsensusTerminalReached, Deadlocked, Blocked, Cancelled]
+
+# TaskExecutionKind
+@dataclass(frozen=True)
+class PlanComplete:   tasks_completed: int; learnings: List[str]
+@dataclass(frozen=True)
+class PlanBlocked:    blocked_tasks: List[str]; reasons: List[str]
+
+TaskTerminal = Union[PlanComplete, PlanBlocked, Exhausted, Cancelled]
+
+# InformationSeekingKind
+@dataclass(frozen=True)
+class InformationSufficient:  findings: List[Finding]; iterations: int
+@dataclass(frozen=True)
+class InformationExhausted:   findings: List[Finding]; open_gaps: List[Gap]
+
+InformationTerminal = Union[InformationSufficient, InformationExhausted, Cancelled]
+
+# ClarificationKind — HUMAN_GATED: no automatic terminal predicate
+# The scheduler NEVER marks a ClarificationKind task terminal.
+# Only an explicit human call to complete() ends it.
+@dataclass(frozen=True)
+class ClarificationConfirmed: spec: str; coverage: Dict[Dimension, CoverageLevel]
+
+ClarificationTerminal = Union[ClarificationConfirmed, Cancelled]
+
+# SelectionKind
+@dataclass(frozen=True)
+class SelectionConverged:   best: Candidate; generations: int
+@dataclass(frozen=True)
+class SelectionExhausted:   best: Candidate; generations: int
+
+SelectionTerminal = Union[SelectionConverged, SelectionExhausted, Blocked, Cancelled]
+
+# Shared terminal states (any kind)
+@dataclass(frozen=True)
+class Blocked:    reason: str
+@dataclass(frozen=True)
+class Cancelled:  requested_by: str
+@dataclass(frozen=True)
+class Exhausted:  turns_used: int; budget_used: int
+```
+
+### The Typed Runner Contract
+
+The kind type determines the runner signature. Runners are dispatched by kind —
+the scheduler matches the task's kind to the runner that handles it.
+
+```python
+# Type-indexed dispatch — each overload handles exactly one kind
+@overload
+def run_turn(task: SaturateTask[MetricOptimizationKind],
+             spec: MetricOptimizationSpec,
+             state: MetricLoopState) -> MetricTurnResult: ...
+
+@overload
+def run_turn(task: SaturateTask[ConsensusKind],
+             spec: ConsensusSpec,
+             state: ConsensusLoopState) -> ConsensusTurnResult: ...
+
+@overload
+def run_turn(task: SaturateTask[TaskExecutionKind],
+             spec: TaskExecutionSpec,
+             state: TaskExecutionLoopState) -> TaskTurnResult: ...
+
+# ... and so on per kind
+
+# Terminal check: only fires for non-human-gated kinds
+@overload
+def should_terminate(spec: MetricOptimizationSpec,
+                     state: MetricLoopState) -> Optional[MetricTerminal]: ...
+# NOTE: no overload for ClarificationKind — terminal is always human-gated
+```
+
+The key guarantee: **a runner that handles `MetricTurnResult` cannot be
+accidentally dispatched for a `ConsensusKind` task.** The type mismatch is
+caught before execution, not at runtime.
+
+---
+
 ## SaturateTask — The Work Item
 
 Everything in Saturate is a `SaturateTask`. There are no special classes for
@@ -57,10 +338,10 @@ class SaturateTask:
     # Identity
     task_id: str                          # UUID
     name: str
-    kind: Literal["loop", "batch", "once"]
-    #  loop  — metric-driven, iterative (hypothesis → measure → keep/revert)
-    #  batch — fan-out to parallel workers, collect and synthesize
-    #  once  — single execution to completion
+    kind: TaskKind                        # typed — see Loop Taxonomy above
+    #  LoopKind subclass  — iterative, typed turn/terminal semantics per kind
+    #  BatchKind          — fan-out to parallel workers, collect and synthesize
+    #  OnceKind           — single execution to completion
 
     # Scheduling
     priority: int                         # 0 (highest) to 100 (lowest)
