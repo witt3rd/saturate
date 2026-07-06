@@ -1,8 +1,9 @@
 # Saturate — Distributed Compute Requirements
 
-> **Purpose:** Technology-agnostic requirements for the Saturate execution fabric.
-> Intended for third-party technology evaluation. No implementation choices are
-> implied; the goal is to identify the best available solution across all ecosystems.
+> **Purpose:** Technology-agnostic requirements written for third-party evaluation.
+> **Status:** Evaluation complete — 2026-07-06.
+> Technology selected: **SQLite/PostgreSQL** (durable queue) + **Nomad** (fleet
+> management). See [ARCHITECTURE.md](../ARCHITECTURE.md) for the resulting design.
 >
 > **Date:** 2026-07-06
 > **Priority notation:** MUST (hard requirement), SHOULD (strong preference), MAY (nice to have)
