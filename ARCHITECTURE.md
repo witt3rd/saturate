@@ -1,122 +1,254 @@
 # Saturate — Architecture
 
 > **Status:** Design / Active — 2026-07-06
-> **Companion:** [oh-my-hermes/docs/v18/architecture.md](https://github.com/witt3rd/oh-my-hermes/blob/main/docs/v18/architecture.md)
 
 ---
 
-## Position in the Arc
+## What Saturate Provides
 
-Saturate is the **Tier 3 execution backend** for
-[oh-my-hermes](https://github.com/witt3rd/oh-my-hermes).
+Saturate is an open source **distributed loop execution fabric**. It runs
+metric-optimization loops across a heterogeneous fleet of machines and keeps
+that fleet continuously saturated with useful autonomous work toward declared
+goals.
 
-```
-Tier 1  in-turn deliberation       ralplan, deep-interview    delegate_task
-Tier 2  durable single-machine     ralph, autopilot           Kanban (Hermes v0.18)
-Tier 3  distributed loop fabric    autoresearch, loop goals   Saturate  ←  this
-```
+It provides:
 
-It implements the **four-operation work-queue interface** that OMH targets:
+- A **durable work queue** (embedded SQLite, no server required in single-node
+  mode) that persists loop state across crashes and restarts
+- A **fleet scheduler** that routes loops to idle nodes based on resource
+  requirements and priority
+- A **loop runner** that executes the hypothesis/measure/keep-or-revert cycle,
+  enforces budget controls, and maintains the iteration audit trail
+- A **published four-operation API** that any agent framework, CLI, or tool
+  can use to submit, claim, and complete loops
 
-```
-post(item)         →  submit a work item to the queue
-claim()            →  a worker claims the next available item
-write_state(item)  →  update the item's running state
-complete(item)     →  mark done, attach output/metadata
-```
-
-Workers (Ray Actors) see only these four operations. They do not know whether
-the backing store is Kanban, Saturate, or a file. That is the whole interface.
-
-**OMH designs work. Saturate runs it. The handoff is a file.**
+Saturate has no dependency on Hermes Agent, Kanban, or any specific agent
+framework. It is self-contained.
 
 ---
 
-## The Unit of Work: SaturateTask
+## The Four-Operation Interface
+
+This is Saturate's published contract. Any conforming producer can submit work;
+any conforming worker can claim and execute it.
+
+```
+post(item)         →  submit a loop to the queue
+claim()            →  atomically claim the next available loop (worker side)
+write_state(item)  →  record iteration progress to the item's state location
+complete(item)     →  mark terminal, attach output and metadata
+```
+
+Workers are **external processes** — arbitrary executables, Python scripts,
+compiled binaries. They do not import a Saturate SDK. Saturate launches them,
+monitors them, and recovers from their crashes.
+
+---
+
+## SaturateTask — The Work Item
 
 Everything in Saturate is a `SaturateTask`. There are no special classes for
-"meta-loop" vs "worker loop" — the hierarchy is expressed through the task
-graph, not through type distinctions.
+"meta-loop" vs "worker" — hierarchy is expressed through the task graph, not
+through type distinctions.
 
 ```python
 @dataclass
 class SaturateTask:
     # Identity
-    task_id: str                         # UUID
-    name: str                            # human-readable label
+    task_id: str                          # UUID
+    name: str
     kind: Literal["loop", "batch", "once"]
-    #   loop  — metric-driven, iterative (hypothesis → measure → keep/revert)
-    #   batch — fan-out to parallel sub-tasks, collect and synthesize
-    #   once  — single execution to completion
+    #  loop  — metric-driven, iterative (hypothesis → measure → keep/revert)
+    #  batch — fan-out to parallel workers, collect and synthesize
+    #  once  — single execution to completion
 
     # Scheduling
-    priority: int                        # 0 (highest) to 100 (lowest)
-    deadline: Optional[datetime]         # hard deadline; None = best-effort
-    earliest_start: Optional[datetime]   # not-before constraint
+    priority: int                         # 0 (highest) to 100 (lowest)
+    deadline: Optional[datetime]          # hard deadline; None = best-effort
+    earliest_start: Optional[datetime]    # not-before constraint
 
-    # Hierarchy  (self-similar — a task spawns tasks)
-    spawned_by: Optional[str]            # parent task_id; None = root
-    depends_on: List[str]                # task_ids that must complete first
+    # Hierarchy
+    spawned_by: Optional[str]             # parent task_id; None = root
+    depends_on: List[str]                 # must complete before this starts
 
     # Resources
-    num_cpus: float                      # fractional OK, e.g. 0.5
-    num_gpus: float                      # 0 = CPU-only (the common case)
-    required_node_class: Optional[str]   # e.g. "DGX_SPARK", "APPLE_SILICON"
-    estimated_duration_seconds: int      # used for deadline urgency scoring
+    num_cpus: float                       # fractional OK — e.g. 0.5
+    num_gpus: float                       # 0 = CPU-only (the common case)
+    required_node_class: Optional[str]    # e.g. "GPU_4090", "APPLE_SILICON"
+    estimated_duration_seconds: int       # used for deadline urgency scoring
 
     # Execution
-    spec_path: str                       # path to <name>-loop.md or spec file
-    max_retries: int                     # automatic retry on crash
+    spec_path: str                        # path to loop spec file (read-only)
+    max_retries: int
 
-    # Budget controls (enforced by the runner)
-    max_turns: Optional[int]             # hard iteration ceiling
-    budget_tokens: Optional[int]         # token/cost ceiling
-    stagnation_n: Optional[int]          # stop after N turns with no improvement
+    # Budget controls (enforced externally by the scheduler)
+    max_turns: Optional[int]
+    budget_tokens: Optional[int]
+    stagnation_n: Optional[int]           # stop after N turns with no improvement
 
     # State
-    state_path: str                      # agreed location for intermediate state
-    output_path: str                     # where completed output is written
-    kanban_task_id: Optional[str]        # backing Kanban row (when Kanban is live)
+    state_path: str                       # agreed location for intermediate state
+    output_path: str                      # where completed output is written
 
     # Metadata
     tags: List[str]
-    submitted_by: str                    # agent name, user, or system
+    submitted_by: str                     # tool, agent, user, or "system"
     submitted_at: datetime
 ```
 
 ### Self-similar hierarchy
 
-The meta-loop is a SaturateTask with `kind="loop"` and `spawned_by=None`. It
-runs until cancelled. It submits child tasks via `post()`. Children submit
-grandchildren the same way. The spawn tree is the task graph — queryable,
-auditable, bounded by budget controls at every level.
+The root scheduler task, a literature-survey loop, and a single
+paper-summarization job are all `SaturateTask` instances. The hierarchy is the
+dependency graph:
 
 ```
 root (kind=loop, spawned_by=None)
   ├── literature-sweep (kind=loop, spawned_by=root.task_id)
-  │     ├── paper-summarize-001 (kind=once, depends_on=[])
-  │     ├── paper-summarize-002 (kind=once, depends_on=[])
-  │     └── synthesis (kind=once, depends_on=[summarize-001, summarize-002])
+  │     ├── summarize-001 (kind=once, depends_on=[])
+  │     ├── summarize-002 (kind=once, depends_on=[])
+  │     └── synthesize   (kind=once, depends_on=[summarize-001, summarize-002])
   ├── build-optimizer (kind=loop, spawned_by=root.task_id)
-  └── code-synthesis (kind=batch, spawned_by=root.task_id)
+  └── code-quality    (kind=batch, spawned_by=root.task_id)
 ```
 
-**Serial and parallel are scheduling properties, not architectural categories.**
-`depends_on` expresses serial constraints. No `depends_on` = freely parallel.
-The scheduler bins them accordingly — this is the whole of "serial vs parallel"
-in the architecture.
+**Serial vs parallel is `depends_on`, not a type distinction.** No dependencies
+= freely parallel. The scheduler bins-packs accordingly.
+
+---
+
+## The Durable Queue
+
+Saturate owns its own durable state. It does not depend on any external
+queueing system.
+
+### Embedded SQLite (single-node mode)
+
+The default. No server process. A single SQLite file holds all task records,
+state transitions, iteration logs, and output metadata. Survives process crashes,
+reboots, and arbitrary restarts. The scheduler rebuilds its in-memory registry
+from the database on startup.
+
+```
+~/.saturate/queue.db       # task records, lifecycle state, spawn graph
+~/.saturate/state/         # per-task intermediate state (written by runners)
+~/.saturate/output/        # completed task output
+```
+
+### PostgreSQL (fleet mode)
+
+When multiple nodes need to claim tasks from the same queue, SQLite's
+file-locking model is insufficient. PostgreSQL provides the atomic claim
+operation (SELECT FOR UPDATE SKIP LOCKED) that makes concurrent multi-node
+workers safe. The same schema, same four operations, different backing store.
+Configuration switches between them — no code changes in workers or producers.
+
+### The atomic claim guarantee
+
+`claim()` is implemented as an atomic row update: a task moves from `ELIGIBLE`
+to `RUNNING` in a single transaction. Two workers on different nodes cannot
+claim the same task simultaneously. A claimed task automatically reverts to
+`ELIGIBLE` after a configurable heartbeat timeout if the worker crashes without
+completing — no manual intervention required.
+
+---
+
+## The Loop Spec Format
+
+The loop spec is Saturate's native work item format for `kind=loop` tasks.
+It is a plain YAML file — any tool can produce one.
+
+```yaml
+name:             build-optimizer
+goal:             Reduce CI build time by at least 20%
+metric:
+  command:        npm run build
+  extract:        wall_clock        # wall_clock | regex:<pattern> | json:<key>
+  direction:      minimize          # minimize | maximize
+  baseline:       null              # measured on first turn if null
+correctness:
+  command:        npm test          # must pass after every accepted hypothesis
+max_turns:        100
+budget_tokens:    500000
+stagnation_n:     10
+terminal_states:  [success, stalled, exhausted, blocked]
+memory:           ./output/build-optimizer/
+spawn:            null              # optional: conditions for child loop creation
+```
+
+Saturate treats the spec as **read-only** during execution. Producers own the
+spec; Saturate runs it.
+
+---
+
+## omh_measure — The Metric Primitive
+
+`omh_measure` runs a command and returns a scalar. It is the only Saturate
+primitive that is also independently useful as an OMH tool.
+
+```python
+omh_measure(
+    command="npm run build",
+    extract="wall_clock",
+    direction="minimize",
+    runs=1,                     # N-run averaging for noisy metrics
+) -> MeasureResult(
+    value=19.1,
+    unit="s",
+    status="ok" | "crash" | "timeout",
+    raw="<captured stdout/stderr>",
+)
+```
+
+Four outcomes, relative to current baseline:
+
+| Outcome | Meaning | Action |
+|---|---|---|
+| `improved` | Metric moved in correct direction | Commit hypothesis, advance baseline |
+| `regressed` | Metric moved in wrong direction | Revert |
+| `crashed` | Command failed or timed out | Revert, do not update baseline |
+| `unchanged` | Within noise threshold | Revert |
+
+`crashed ≠ regressed` — a crashing hypothesis does not pollute the baseline
+statistics. The correctness gate (`spec.correctness`) must pass in addition to
+metric improvement — this is the reward-hacking guard.
+
+---
+
+## The Loop Runner
+
+A loop runner executes one turn of the hypothesis/measure/keep-or-revert cycle
+for a `kind=loop` task. Runners are external processes — Saturate launches
+them, they are not embedded in the scheduler.
+
+```
+runner receives: task_id, spec_path, state_path, output_path
+runner does:
+  1. load spec
+  2. load current state (baseline metric, turn count, stagnation count)
+  3. generate hypothesis   ← calls external agent/API
+  4. apply tentatively     ← modifies files, builds, etc.
+  5. measure               ← omh_measure → scalar
+  6. correctness gate      ← run spec.correctness command
+  7. keep or revert
+  8. write_state(updated state)
+  9. check terminal conditions
+  10. if terminal: complete(task, output)
+      else:        exit cleanly (scheduler re-invokes on next tick)
+```
+
+The runner executes **one turn per invocation** and exits. The scheduler
+re-invokes it on the next tick. This is how budget controls are enforced
+externally — the scheduler checks `max_turns`, `stagnation_n`, and
+`budget_tokens` before re-invoking. The runner never implements its own while-loop.
 
 ---
 
 ## Scheduling: Priority and Deadline Scoring
 
-The scheduler ranks dispatchable tasks by a score combining base priority and
-deadline urgency:
-
 ```python
 def dispatch_score(task: SaturateTask, now: datetime) -> float:
-    # base: lower priority number = higher urgency
-    base = (100 - task.priority) / 100  # 0.0 .. 1.0
+    base = (100 - task.priority) / 100      # 0.0 .. 1.0
 
     urgency = 0.0
     if task.deadline and task.estimated_duration_seconds > 0:
@@ -127,18 +259,10 @@ def dispatch_score(task: SaturateTask, now: datetime) -> float:
     return base + urgency  # higher = dispatch first
 ```
 
-A task approaching its deadline relative to its estimated duration accrues
-urgency on top of its base priority. A P0 task with no deadline scores 1.0
-base and dispatches first by pure priority. A P2 background loop approaching
-its deadline begins to compete with P1 foreground work.
-
-### Dispatchability
-
-A task is dispatchable when:
-1. All `depends_on` task_ids are in `COMPLETE` state
-2. `earliest_start` has passed (or is None)
-3. A node with sufficient `num_cpus`, `num_gpus`, and `required_node_class`
-   is idle
+A P0 task with no deadline scores 1.0 and dispatches first by priority alone.
+A background P3 loop approaching its deadline accrues urgency score and begins
+competing with P1 work. A task at `remaining == estimated_duration_seconds`
+has urgency 0.5, regardless of its base priority.
 
 ---
 
@@ -150,274 +274,153 @@ SUBMITTED
     ▼
 PENDING ──── dependency unmet ──► BLOCKED
     │                                 │
-    │  deps resolved                  │ deps resolved
+    │  all deps COMPLETE              │ deps resolved
     ▼                                 ▼
 ELIGIBLE ◄────────────────────────────┘
     │
-    │  idle node matched + Actor spawned
+    │  idle node matched, runner launched
     ▼
-RUNNING
-    │               │
-    │  success      │  crash (retriable)
-    ▼               ▼
-COMPLETE        RETRYING ──► RUNNING
-                    │
-                    │  max_retries exceeded
-                    ▼
-                  FAILED
+RUNNING ──── heartbeat timeout ──► ELIGIBLE  (crash recovery)
+    │
+    ├── runner exits cleanly (turn complete, not terminal)
+    │         │
+    │         └──► ELIGIBLE  (re-queued for next turn)
+    │
+    ├── runner calls complete()
+    │         │
+    │         └──► COMPLETE
+    │
+    └── runner crashes (no heartbeat within timeout)
+              │
+              └──► RETRYING ──► ELIGIBLE
+                       │
+                       │  max_retries exceeded
+                       └──► FAILED
 ```
-
-Terminal states for `kind=loop`:
-
-| State | Meaning |
-|---|---|
-| `success` | Optional target threshold was hit |
-| `stalled` | `stagnation_n` consecutive turns with no accepted improvement |
-| `exhausted` | `max_turns` or `budget_tokens` ceiling reached |
-| `blocked` | Runner encountered an unresolvable dependency |
-| `cancelled` | Human stopped it via `kanban_block` → cancel |
 
 ---
 
-## The Loop Runner (kind=loop)
+## The Scheduler (Meta-Loop)
 
-A Ray Actor. One instance per active loop task. Owns the
-hypothesis → apply → measure → keep/revert cycle:
-
-```python
-@ray.remote(num_cpus=1)
-class LoopActor:
-    def __init__(self, task: SaturateTask): ...
-
-    def run_turn(self) -> TurnResult:
-        spec = load_spec(self.task.spec_path)
-        h = self.generate_hypothesis(spec)   # delegate_task → optimizer role
-        self.apply_tentatively(h)            # git stash / temp branch
-        m = omh_measure(spec.metric)         # → MeasureResult
-        ok = self.correctness_gate(spec)     # → bool
-        if m.improved and ok:
-            self.commit(h)
-            return TurnResult.ACCEPTED
-        else:
-            self.revert()
-            return TurnResult.DISCARDED
-
-    def should_stop(self) -> Optional[StopReason]:
-        if self.turns >= self.task.max_turns: return StopReason.EXHAUSTED
-        if self.stagnant >= self.task.stagnation_n: return StopReason.STALLED
-        return None
-```
-
-The actor does not drive its own loop. It executes one turn when the scheduler
-invokes it, then reports back. The scheduler decides whether to invoke again —
-this is how `max_turns` and budget controls are enforced externally rather than
-inside the actor.
-
----
-
-## omh_measure — the Metric Primitive
-
-Returns a scalar from a command. Not a pass/fail. This is the primitive that
-makes non-boolean loops possible.
+The scheduler is a single process on the head node. It polls the queue on a
+configurable interval (default: 30s) and drives the fleet.
 
 ```python
-omh_measure(
-    command="npm run build",
-    extract="wall_clock",              # wall_clock | regex:<pattern> | json:<key>
-    direction="minimize",
-    runs=1,                            # N-run averaging for noisy metrics
-) -> MeasureResult(
-    value=19.1,
-    unit="s",
-    status="ok" | "crash" | "timeout",
-    raw="<captured stdout/stderr>",
-)
-```
+def scheduler_tick(queue: Queue, fleet: Fleet, goals: GoalDirectory):
+    # 1. harvest complete and failed tasks
+    for task in queue.terminal():
+        harvest(task)
+        if task.should_spawn():
+            for child_spec in task.next_loops():
+                queue.post(child_spec, spawned_by=task.task_id)
 
-Outcome classification (relative to current baseline):
+    # 2. reclaim crashed runners
+    for task in queue.running():
+        if task.heartbeat_expired():
+            queue.requeue(task)
 
-| Status | Meaning |
-|---|---|
-| `improved` | Metric moved in the right direction |
-| `regressed` | Metric moved in the wrong direction |
-| `crashed` | Command exited non-zero or timed out |
-| `unchanged` | Metric within noise threshold |
+    # 3. seed from goal directory if fleet is underutilized
+    if fleet.underutilized():
+        for spec in goals.next_pending():
+            queue.post(spec)
 
-`crashed` ≠ `regressed`. A hypothesis that crashes is discarded without
-updating the baseline — it is not treated as "infinitely bad," which would
-corrupt running statistics.
-
-Correctness gate: every accepted improvement must also pass the correctness
-command (`spec.correctness`) before it is committed. Metric-better + tests-broken
-= discard. This is the reward-hacking guard.
-
----
-
-## The Meta-Loop
-
-The root SaturateTask. `kind=loop`, `spawned_by=None`. Runs as a persistent
-Ray Actor on the head node. Its job is fleet orchestration, not hypothesis
-generation.
-
-```python
-def meta_loop_tick(registry: TaskRegistry, fleet: Fleet, goals: GoalRegistry):
-    # 1. harvest completed and failed tasks
-    for task in registry.terminal():
-        harvest(task)                              # collect output to output_path
-        if should_spawn(task):
-            for child_spec in next_loops(task):
-                registry.post(child_spec, spawned_by=task.task_id)
-
-    # 2. reap stalled tasks
-    for task in registry.running():
-        if task.actor.should_stop():
-            registry.complete(task, reason=task.actor.stop_reason())
-
-    # 3. dispatch eligible tasks to idle nodes
-    eligible = sorted(registry.eligible(), key=dispatch_score, reverse=True)
+    # 4. dispatch eligible tasks to idle nodes
+    eligible = sorted(queue.eligible(), key=dispatch_score, reverse=True)
     for node in fleet.idle_nodes():
         for task in eligible:
             if node.fits(task):
-                actor = LoopActor.options(
-                    num_cpus=task.num_cpus,
-                    num_gpus=task.num_gpus,
-                    resources={task.required_node_class: 1} if task.required_node_class else {},
-                ).remote(task)
-                registry.mark_running(task, node, actor)
+                node.launch_runner(task)
+                queue.mark_running(task, node)
                 eligible.remove(task)
                 break
-
-    # 4. seed from goal registry if fleet is underutilized
-    if fleet.underutilized():
-        for spec in goals.next_pending():
-            registry.post(spec)
 ```
 
-The meta-loop itself is stateless between ticks. All durable state is in Kanban.
-A restart rebuilds the in-memory registry from `kanban_list`.
+The scheduler is **stateless between ticks** — all durable state is in the
+queue database. A scheduler restart recovers completely from the database.
 
 ---
 
-## Kanban as State Substrate
+## Fleet Management
 
-Kanban (Hermes v0.18.0) is the durable backing store for task state. It
-implements the four-operation interface natively.
+### Single-node (Phase 1)
 
-| Interface operation | Kanban call |
-|---|---|
-| `post(task)` | `kanban_create(task_id, spec_path, metadata={priority, deadline, ...})` |
-| `claim()` | `kanban_next()` — atomic, crash-safe claim |
-| `write_state(task, state)` | `kanban_comment(task_id, state)` — iteration log |
-| `complete(task, output)` | `kanban_complete(task_id, metadata={metric, turns, output_path, reason})` |
+The scheduler and all runners share one machine. `fleet.idle_nodes()` returns
+`[localhost]` with the current CPU/memory headroom. No distributed framework
+required.
 
-Spawn relationships: child tasks are Kanban sub-tasks linked to their parent.
-The full spawn tree is the Kanban task graph — queryable via `kanban_list`.
+### Multi-node (Phase 2+): Nomad
+
+[HashiCorp Nomad](https://www.nomadproject.io) is the fleet layer. A single
+binary, no Kubernetes, Linux and macOS native, Tailscale-friendly. Nomad
+handles:
+
+- Node registration and resource advertisement
+- Fractional CPU/GPU allocation per job
+- Custom capability tags for hardware routing
+- Worker process lifecycle (launch, monitor, kill)
+- Crash detection and job failure signaling
+
+Saturate's scheduler submits jobs to Nomad's HTTP API; Nomad places them on
+the right node and reports back. The queue database (PostgreSQL in fleet mode)
+is the source of truth for task state — Nomad is the execution layer, not the
+state layer.
+
+```
+Saturate scheduler
+  │  reads queue state      PostgreSQL queue.db
+  │  submits Nomad jobs ──► Nomad server
+  │                              │
+  │                         Nomad agents on each node
+  │                              │  launch runners
+  │                              └─ DGX Spark, RTX WS, MacPro, MacBook, ...
+  │  receives job events ◄──────────────────────────────────────────────┘
+  └  updates queue state
+```
+
+### Node capability tags (examples)
+
+```hcl
+# In each node's Nomad client config
+meta {
+  gpu_class    = "RTX_4090"
+  has_gpu      = "true"
+  node_class   = "LINUX_WS"
+}
+```
+
+Saturate loop specs declare `required_node_class` if they need specific
+hardware. Most loops leave it null — CPU + network is sufficient.
 
 ---
 
-## The Goal Registry
+## The Goal Directory
 
-Active objectives live as loop spec files committed to the repo:
+Active loop specs live as files in a watched directory:
 
 ```
 goals/
-├── index.yaml              priority ordering, active/paused status
-├── build-optimizer.md      <name>-loop.md spec
-├── literature-sweep.md
-└── code-quality.md
+├── index.yaml            # priority ordering, active/paused flags
+├── build-optimizer.yaml  # loop spec
+├── lit-survey-ml.yaml
+└── code-quality.yaml
 ```
 
-Adding a goal = commit a `<name>-loop.md`. Pausing = edit `index.yaml`.
-No runtime API required in v1. The meta-loop reads the registry on each tick.
-
-### The Loop Spec Format
-
-Produced by `omh-loop-design` deliberation. Read-only to Saturate.
-
-```yaml
-goal:             what the loop is trying to achieve
-metric:           the scalar to optimize (command + extraction mode)
-direction:        minimize | maximize
-correctness:      command that must still pass after every accepted hypothesis
-max_turns:        hard iteration ceiling
-budget_tokens:    token/cost ceiling
-stagnation_n:     stop after N turns with no accepted improvement
-terminal_states:  [success, stalled, exhausted, blocked]
-driver:           cron | kanban-goal | saturate-actor
-memory:           where outputs and findings are written
-spawn:            conditions under which child loops are created (optional)
-```
+Adding a goal = drop a spec file. Pausing = edit `index.yaml`. The scheduler
+reads the directory on each tick. No runtime API needed in v1.
 
 ---
 
-## Ray Integration
+## Observability
 
-Each SaturateTask runs as a Ray Actor. The fleet is one Ray cluster across all
-nodes connected via Tailscale.
-
-```python
-# Node resource tags — used for required_node_class routing
-# Each node joins with its custom resource advertised:
-ray start --resources='{"DGX_SPARK": 1, "num_gpus": 1}'
-ray start --resources='{"APPLE_SILICON": 1}'
-ray start --resources='{"LINUX_WS_4090": 1, "num_gpus": 1}'
-```
-
-Fractional CPU allocation: `num_cpus=0.5` allows multiple lightweight loops
-to share a node. A CPU-only node with 16 cores might run 8 concurrent loops
-at `num_cpus=2` each. The DGX Spark might run 4 CPU loops at `num_cpus=4`
-alongside inference work.
-
-GPU use is opportunistic, not pooled. A loop that needs local inference
-routes to a node that has a GPU via `required_node_class`. Saturate does not
-pool or shard GPU capacity across nodes for a single task — loops run on
-whatever single node fits their resource profile.
-
----
-
-## Idle Detection
-
-```python
-import psutil
-
-def node_is_idle(thresholds: NodeThresholds) -> bool:
-    cpu = psutil.cpu_percent(interval=1)
-    if cpu > thresholds.cpu_pct:          # e.g. 40%
-        return False
-    mem = psutil.virtual_memory().percent
-    if mem > thresholds.mem_pct:          # e.g. 80%
-        return False
-    return True
-```
-
-GPU nodes additionally check DCGM metrics. A node running a P0 interactive
-session is not idle regardless of CPU utilization. Thresholds are
-per-node-class and tunable via config.
-
----
-
-## Fleet
-
-| Node | OS | CPU | GPU | Role |
-|---|---|---|---|---|
-| DGX Spark (GB10) | Linux | ARM | 128 GB unified (Blackwell) | Heavy loops + local inference |
-| Linux Workstation × 2 | Linux | x86 | RTX 4090, RTX 3090 | CPU loops + GPU inference |
-| MacBook Pro | macOS | Apple Silicon | MPS | CPU loops + dev |
-| Mac Pro | macOS | Intel/ARM | AMD | Background CPU loops |
-| Linux Laptop | Linux | x86 | iGPU | CPU loops |
-
-All nodes on Tailscale mesh. Windows nodes deferred.
-
----
-
-## Monitoring
-
-- **Ray Dashboard** (port 8265) — per-node utilization, actor state, task
-  throughput, object store across the fleet
-- **Kanban audit trail** — every loop's full turn-by-turn history: accepted
-  hypotheses, discarded ones, final terminal state and reason, spawn graph
-- **`saturate status`** — human-readable fleet view: active loops, current
-  metric values, turns to date, stagnation counters
+- **`saturate status`** — CLI: active loops, current metric values, turns to
+  date, stagnation counters, node utilization
+- **Queue database** — full audit trail queryable with any SQLite/Postgres
+  client: every task's lifecycle events, every iteration's hypothesis and
+  outcome, spawn graph
+- **Prometheus endpoint** — `/metrics` exposes queue depth by priority tier,
+  active tasks per node, completed/failed task counts, loop metric histories
+- **Nomad Dashboard** (Phase 2) — per-node utilization, job placements, failure
+  history
 
 ---
 
@@ -425,39 +428,46 @@ All nodes on Tailscale mesh. Windows nodes deferred.
 
 | Concern | Owner |
 |---|---|
-| Loop deliberation (goal → verifiable spec) | OMH (`omh-loop-design`) |
-| Metric-optimization loop skill | OMH (`omh-autoresearch`) |
-| Inference serving | vLLM / llama.cpp on the node |
-| Multi-GPU model sharding | Out of scope — Saturate routes loops to nodes, not GPU capacity across nodes |
-| Cognitive fleet direction (what to spawn next, long-horizon goals) | Continuum |
-| Kubernetes / Kueue / Temporal | Out of scope — Kanban + Ray is the stack |
+| Designing loops (goal → verifiable spec) | Calling tool (e.g. oh-my-hermes) |
+| Agent framework / LLM orchestration | Worker's concern; Saturate is agnostic |
+| Inference serving | The node's own runtime (vLLM, llama.cpp, API call) |
+| Multi-GPU model sharding | Out of scope — loops run on one node |
+| Kubernetes / container orchestration | Explicitly excluded |
+| Business logic workflow (DAG, exactly-once) | Temporal, Airflow, Prefect |
+| Cognitive fleet direction (long-horizon planning) | Out of scope — Saturate executes declared goals |
 
 ---
 
 ## Implementation Roadmap
 
-### Phase 1 — Single-Node Loop Runner (Week 1–2)
-- `omh_measure` primitive: wall_clock, regex, json extraction modes
-- `LoopActor`: hypothesis → measure → keep/revert cycle
-- Kanban integration: four-operation interface over Kanban
-- Single loop, single node, full lifecycle end-to-end
+### Phase 1 — Single-Node Loop Runner
+- Embedded SQLite queue with four-operation interface
+- `SaturateTask` dataclass + queue CRUD
+- `omh_measure`: wall_clock, regex, json extraction; four-outcome classification
+- Loop runner: one turn per invocation, hypothesis/measure/keep-or-revert
+- Scheduler tick: idle detection, dispatch, harvest, crash recovery
+- Goal directory: file-drop interface
+- `saturate submit` / `saturate status` CLI
+- Full loop lifecycle end-to-end on one machine
 
-### Phase 2 — Task Graph + Meta-Loop (Week 3–4)
-- `SaturateTask` dataclass + registry
-- Meta-loop tick: idle detection, dispatch, harvest, reaping
-- Goal registry: `goals/` directory + `index.yaml`
-- Child task spawning: `post()` from a running actor
-- `saturate status` CLI
+### Phase 2 — Multi-Node Fleet
+- PostgreSQL queue backend (atomic claim via SELECT FOR UPDATE SKIP LOCKED)
+- Nomad integration: job submission, resource tagging, crash events
+- Per-node resource advertisement and `required_node_class` routing
+- Priority + deadline dispatch scoring
+- Fractional CPU allocation: multiple loops per node
+- `saturate status --fleet` showing all nodes
 
-### Phase 3 — Fleet (Week 5–6)
-- Ray cluster across all nodes
-- Per-node resource tagging + `required_node_class` routing
-- Fractional CPU: multiple loops per node
-- Priority + deadline scoring in dispatch
-- Stagnation detection + clean terminal-state handling
+### Phase 3 — Loop Ecosystem
+- Child loop spawning from a running runner
+- Spawn graph querying and visualization
+- Prometheus metrics endpoint
+- Stagnation detector + configurable terminal-state handling
+- `batch` kind: fan-out workers, collect-and-synthesize
+- HTTP API (as alternative to CLI for programmatic producers)
 
-### Phase 4 — OMH Integration (Week 7–8)
-- `omh-loop-design` skill producing Saturate-compatible specs
-- `omh-autoresearch` skill as first Tier 3 consumer
-- End-to-end: design a loop in OMH → commit spec → Saturate runs it overnight
-- Audit trail review workflow + `kanban_list` sprint review
+### Phase 4 — Hardening
+- Multi-node integration test suite
+- Preemption: P0 task arrival preempts running P3 loops
+- Budget controls at the fleet level (total token spend across all active loops)
+- Documentation site
