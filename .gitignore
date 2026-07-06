@@ -1,0 +1,121 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+wheels/
+share/python-wheels/
+*.whl
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# uv
+.python-version
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.pyre/
+
+# Testing
+.tox/
+.nox/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+htmlcov/
+nosetests.xml
+test-results/
+junit*.xml
+
+# Linting
+.ruff_cache/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Ray
+/tmp/ray/
+ray_results/
+ray-*.log
+
+# DCGM / GPU telemetry logs
+dcgm_*.log
+dcgm_*.csv
+
+# Model weights and checkpoints (large binaries)
+*.bin
+*.safetensors
+*.gguf
+*.ggml
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+models/
+
+# LoRA / fine-tuning outputs
+lora_output/
+ft_output/
+runs/
+
+# Experiment outputs
+outputs/
+results/
+wandb/
+mlruns/
+
+# Logs
+*.log
+logs/
+
+# Secrets / credentials
+.env.local
+.env.*.local
+secrets.yaml
+secrets.json
+credentials.json
+*.key
+*.pem
+
+# OMH workflow state
+.omh/
+
+# Distribution / packaging
+MANIFEST
+pip-log.txt
+pip-delete-this-directory.txt
