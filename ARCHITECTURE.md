@@ -326,6 +326,106 @@ caught before execution, not at runtime.
 
 ---
 
+## The Loop Taxonomy
+
+Every work item in Saturate has a **kind** — a typed declaration of what one
+iteration produces and what terminal conditions are valid. The kind determines
+the spec schema, the valid turn results, and whether human gating is required.
+There is no generic loop; the kind is the contract.
+
+This taxonomy is Saturate's. OMH and other producers map their patterns to it
+when submitting work.
+
+### LoopKind definitions
+
+| Kind | One turn produces | Terminal conditions | Human gated |
+|---|---|---|---|
+| `metric-optimization` | `Accepted \| Discarded` | `success \| stalled \| exhausted \| blocked` | No |
+| `task-execution` | `TaskPassed \| TaskFailed \| TaskBlocked \| AllTasksPassed` | `all_passed \| failed \| blocked` | Optional HITL gates |
+| `information-seeking` | `FindingsAdded \| Sufficient` | `sufficient \| exhausted \| stalled` | No |
+| `clarification` | `CoverageUpdated \| HumanConfirmed` | `human_confirmed` only | **Yes — always** |
+| `consensus` | `RoundComplete \| ConsensusReached` | `consensus_reached \| max_rounds` | No |
+| `selection` | `GenerationComplete \| Converged` | `converged \| exhausted` | No |
+
+**`clarification` is structurally human-gated.** The scheduler never marks a
+`clarification` task terminal. Only an explicit human `complete()` call ends
+it. This is a type property, not a prose rule.
+
+### Kind → spec schema
+
+Each kind has its own required spec fields. A spec without all required fields
+for its declared kind is not schedulable.
+
+```yaml
+# metric-optimization
+kind:          metric-optimization
+goal:          string
+metric:
+  command:     string
+  extract:     wall_clock | regex:<pattern> | json:<key>
+  direction:   minimize | maximize
+correctness:
+  command:     string
+max_turns:     int
+budget_tokens: int
+stagnation_n:  int
+terminal_states: [success, stalled, exhausted, blocked]
+memory:        path
+```
+
+```yaml
+# task-execution
+kind:          task-execution
+goal:          string
+plan_path:     path        # path to task list spec
+memory:        path
+```
+
+```yaml
+# information-seeking
+kind:          information-seeking
+goal:          string
+sufficiency:
+  command:     string      # returns pass when enough is known
+max_turns:     int
+budget_tokens: int
+stagnation_n:  int
+memory:        path
+```
+
+```yaml
+# clarification  (HUMAN_GATED — only human complete() ends this)
+kind:          clarification
+goal:          string
+dimensions:    [dim1, dim2, ...]   # coverage axes
+memory:        path
+```
+
+```yaml
+# consensus
+kind:          consensus
+goal:          string
+roles:         [role1, role2, ...]
+consensus_fn:  all-approve | majority | arbiter
+max_rounds:    int
+memory:        path
+```
+
+```yaml
+# selection
+kind:          selection
+goal:          string
+generator:
+  command:     string
+scoring:
+  command:     string      # returns a scalar score per candidate
+max_turns:     int
+budget_tokens: int
+memory:        path
+```
+
+---
+
 ## SaturateTask — The Work Item
 
 Everything in Saturate is a `SaturateTask`. There are no special classes for
@@ -338,10 +438,7 @@ class SaturateTask:
     # Identity
     task_id: str                          # UUID
     name: str
-    kind: TaskKind                        # typed — see Loop Taxonomy above
-    #  LoopKind subclass  — iterative, typed turn/terminal semantics per kind
-    #  BatchKind          — fan-out to parallel workers, collect and synthesize
-    #  OnceKind           — single execution to completion
+    kind: str                             # one of the six loop kinds above
 
     # Scheduling
     priority: int                         # 0 (highest) to 100 (lowest)
