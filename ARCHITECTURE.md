@@ -326,106 +326,6 @@ caught before execution, not at runtime.
 
 ---
 
-## The Loop Taxonomy
-
-Every work item in Saturate has a **kind** — a typed declaration of what one
-iteration produces and what terminal conditions are valid. The kind determines
-the spec schema, the valid turn results, and whether human gating is required.
-There is no generic loop; the kind is the contract.
-
-This taxonomy is Saturate's. OMH and other producers map their patterns to it
-when submitting work.
-
-### LoopKind definitions
-
-| Kind | One turn produces | Terminal conditions | Human gated |
-|---|---|---|---|
-| `metric-optimization` | `Accepted \| Discarded` | `success \| stalled \| exhausted \| blocked` | No |
-| `task-execution` | `TaskPassed \| TaskFailed \| TaskBlocked \| AllTasksPassed` | `all_passed \| failed \| blocked` | Optional HITL gates |
-| `information-seeking` | `FindingsAdded \| Sufficient` | `sufficient \| exhausted \| stalled` | No |
-| `clarification` | `CoverageUpdated \| HumanConfirmed` | `human_confirmed` only | **Yes — always** |
-| `consensus` | `RoundComplete \| ConsensusReached` | `consensus_reached \| max_rounds` | No |
-| `selection` | `GenerationComplete \| Converged` | `converged \| exhausted` | No |
-
-**`clarification` is structurally human-gated.** The scheduler never marks a
-`clarification` task terminal. Only an explicit human `complete()` call ends
-it. This is a type property, not a prose rule.
-
-### Kind → spec schema
-
-Each kind has its own required spec fields. A spec without all required fields
-for its declared kind is not schedulable.
-
-```yaml
-# metric-optimization
-kind:          metric-optimization
-goal:          string
-metric:
-  command:     string
-  extract:     wall_clock | regex:<pattern> | json:<key>
-  direction:   minimize | maximize
-correctness:
-  command:     string
-max_turns:     int
-budget_tokens: int
-stagnation_n:  int
-terminal_states: [success, stalled, exhausted, blocked]
-memory:        path
-```
-
-```yaml
-# task-execution
-kind:          task-execution
-goal:          string
-plan_path:     path        # path to task list spec
-memory:        path
-```
-
-```yaml
-# information-seeking
-kind:          information-seeking
-goal:          string
-sufficiency:
-  command:     string      # returns pass when enough is known
-max_turns:     int
-budget_tokens: int
-stagnation_n:  int
-memory:        path
-```
-
-```yaml
-# clarification  (HUMAN_GATED — only human complete() ends this)
-kind:          clarification
-goal:          string
-dimensions:    [dim1, dim2, ...]   # coverage axes
-memory:        path
-```
-
-```yaml
-# consensus
-kind:          consensus
-goal:          string
-roles:         [role1, role2, ...]
-consensus_fn:  all-approve | majority | arbiter
-max_rounds:    int
-memory:        path
-```
-
-```yaml
-# selection
-kind:          selection
-goal:          string
-generator:
-  command:     string
-scoring:
-  command:     string      # returns a scalar score per candidate
-max_turns:     int
-budget_tokens: int
-memory:        path
-```
-
----
-
 ## SaturateTask — The Work Item
 
 Everything in Saturate is a `SaturateTask`. There are no special classes for
@@ -559,13 +459,13 @@ spec; Saturate runs it.
 
 ---
 
-## omh_measure — The Metric Primitive
+## saturate.measure — The Metric Primitive
 
-`omh_measure` runs a command and returns a scalar. It is the only Saturate
-primitive that is also independently useful as an OMH tool.
+`saturate.measure` runs a command and returns a scalar. It is Saturate's
+built-in measurement primitive — usable by any runner directly.
 
 ```python
-omh_measure(
+saturate.measure(
     command="npm run build",
     extract="wall_clock",
     direction="minimize",
@@ -606,7 +506,7 @@ runner does:
   2. load current state (baseline metric, turn count, stagnation count)
   3. generate hypothesis   ← calls external agent/API
   4. apply tentatively     ← modifies files, builds, etc.
-  5. measure               ← omh_measure → scalar
+  5. measure               ← saturate.measure → scalar
   6. correctness gate      ← run spec.correctness command
   7. keep or revert
   8. write_state(updated state)
@@ -806,7 +706,7 @@ reads the directory on each tick. No runtime API needed in v1.
 
 | Concern | Owner |
 |---|---|
-| Designing loops (goal → verifiable spec) | Calling tool (e.g. oh-my-hermes) |
+| Designing loops (goal → verifiable spec) | Producer's concern — Saturate is agnostic |
 | Agent framework / LLM orchestration | Worker's concern; Saturate is agnostic |
 | Inference serving | The node's own runtime (vLLM, llama.cpp, API call) |
 | Multi-GPU model sharding | Out of scope — loops run on one node |
@@ -821,7 +721,7 @@ reads the directory on each tick. No runtime API needed in v1.
 ### Phase 1 — Single-Node Loop Runner
 - Embedded SQLite queue with four-operation interface
 - `SaturateTask` dataclass + queue CRUD
-- `omh_measure`: wall_clock, regex, json extraction; four-outcome classification
+- `saturate.measure`: wall_clock, regex, json extraction; four-outcome classification
 - Loop runner: one turn per invocation, hypothesis/measure/keep-or-revert
 - Scheduler tick: idle detection, dispatch, harvest, crash recovery
 - Goal directory: file-drop interface

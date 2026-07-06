@@ -7,25 +7,19 @@ continuously running useful agentic loops toward declared goals.
 
 ## What It Is
 
-Saturate takes a `<name>-loop.md` specification (produced by
-[oh-my-hermes](https://github.com/witt3rd/oh-my-hermes) deliberation), schedules
-it onto an idle node in your fleet, and runs it:
+Saturate takes a loop spec (a plain YAML file), schedules it onto an idle node
+in your fleet, and runs the hypothesis/measure/keep-or-revert cycle until a
+terminal condition is met:
 
 ```
-goal declared → loop designed (OMH) → loop spec committed → Saturate runs it
+loop spec committed → Saturate schedules it → loop runs on idle CPU
 ```
 
 A loop is not a task. It iterates: generate a hypothesis, apply it tentatively,
-measure whether the metric improved, keep or revert, repeat. Loops run in the
-background across idle CPU cores, making incremental progress toward declared
-objectives. The meta-loop keeps the fleet saturated — dispatching new loops
-when nodes go idle, reaping stalled ones, spawning child loops from completed
-work.
-
-The world moved to GPU. CPU is underutilized. Agentic orchestration —
-coordination, tool calls, code execution, hypothesis generation — is CPU and
-network bound. A seven-machine fleet with idle CPU cores is seven machines that
-could be running useful loops right now.
+measure whether the metric improved, keep or revert, repeat. Loops run across
+idle CPU cores on whatever machines you have, making continuous progress toward
+declared goals. When loops complete, they can spawn child loops. The fleet
+self-directs.
 
 ---
 
@@ -33,12 +27,12 @@ could be running useful loops right now.
 
 | Concept | Description |
 |---|---|
-| **Loop** | A goal + metric + hypothesis engine + terminal condition, running until stopped or stalled |
-| **Loop spec** | `<name>-loop.md` — the interface between OMH and Saturate |
-| **Goal registry** | `goals/` directory of active loop specs |
-| **Meta-loop** | The orchestrator: surveys fleet, dispatches loops, harvests output |
-| **LoopRunner** | A Ray Actor — one per active loop, owns hypothesis/measure/keep-or-revert |
-| **omh_measure** | Returns a scalar metric from a command, not a pass/fail |
+| **Loop spec** | Plain YAML file declaring goal, metric, budget controls, terminal states |
+| **Loop kind** | The typed iteration pattern: `metric-optimization`, `task-execution`, `information-seeking`, `clarification`, `consensus`, `selection` |
+| **Goal directory** | `goals/` — drop a spec file, Saturate picks it up |
+| **SaturateTask** | The runtime work item — self-similar, hierarchical via `depends_on` / `spawned_by` |
+| **saturate.measure** | Built-in primitive: runs a command, returns a scalar with four outcomes |
+| **Meta-loop** | The scheduler tick: survey fleet, dispatch eligible tasks, harvest completions |
 
 ---
 
@@ -47,22 +41,23 @@ could be running useful loops right now.
 ```
 saturate/
 ├── VISION.md              the thesis and direction
-├── ARCHITECTURE.md        this file
-├── README.md              project overview
+├── ARCHITECTURE.md        components, loop taxonomy, design decisions
+├── README.md              this file
 │
 ├── goals/                 active loop specifications
 │   ├── index.yaml         priority ordering, active/paused status
-│   └── <name>-loop.md     one spec per declared objective
+│   └── <name>.yaml        one spec per declared objective
 │
 ├── saturate/              Python package
-│   ├── meta.py            meta-loop orchestrator
-│   ├── runner.py          LoopRunner Ray Actor
-│   ├── measure.py         omh_measure — scalar metric primitive
-│   ├── registry.py        in-memory loop registry (backed by Kanban)
-│   └── goals.py           goal registry reader
+│   ├── meta.py            scheduler / meta-loop
+│   ├── runner.py          loop runner (one turn per invocation)
+│   ├── measure.py         saturate.measure — scalar metric primitive
+│   ├── queue.py           durable queue (SQLite → PostgreSQL)
+│   └── goals.py           goal directory reader
 │
 ├── docs/
-│   └── Saturate  Architecture Reference.md   original research reference
+│   ├── Saturate  Architecture Reference.md   original research reference
+│   └── distributed_compute_requirements.md  technology evaluation (complete)
 │
 └── tests/
 ```
@@ -71,26 +66,15 @@ saturate/
 
 ## Dependencies
 
-- [Ray](https://www.ray.io) — distributed compute substrate
+- [Ray](https://www.ray.io) — distributed compute (Phase 1: optional; Phase 2+: fleet scheduling)
+- [Nomad](https://www.nomadproject.io) — fleet node management (Phase 2+)
 - [Tailscale](https://tailscale.com) — fleet networking mesh
-- [Hermes Kanban](https://github.com/NousResearch/hermes-agent) — durable loop
-  state substrate
-- [oh-my-hermes](https://github.com/witt3rd/oh-my-hermes) — loop design and
-  deliberation (upstream, not a runtime dependency)
-
----
-
-## Related Projects
-
-- **[oh-my-hermes](https://github.com/witt3rd/oh-my-hermes)** — designs loops;
-  Saturate runs them. The handoff is a `<name>-loop.md` spec file.
-- **[continuum](https://github.com/witt3rd/continuum)** — persistent cognitive
-  presence; natural fit for driving the meta-loop.
+- SQLite (embedded, Phase 1) / PostgreSQL (fleet mode, Phase 2+)
 
 ---
 
 ## Docs
 
 - [VISION.md](VISION.md) — thesis, goals, and direction
-- [ARCHITECTURE.md](ARCHITECTURE.md) — components, lifecycle, design decisions
-- [docs/Saturate Architecture Reference.md](docs/Saturate%20%20Architecture%20Reference.md) — original research reference (Ray, Nalar, fleet hardware)
+- [ARCHITECTURE.md](ARCHITECTURE.md) — loop taxonomy, components, design decisions
+- [docs/distributed_compute_requirements.md](docs/distributed_compute_requirements.md) — technology evaluation (SQLite/PostgreSQL + Nomad selected)

@@ -112,8 +112,8 @@ workload.
 
 **Not tied to any specific agent framework**. Saturate defines a loop spec
 format and a four-operation API. Anything that produces a conforming spec can
-submit work: [oh-my-hermes](https://github.com/witt3rd/oh-my-hermes), a shell
-script, a Python function, a custom agent framework. Saturate runs it.
+submit work: a deliberation tool, a shell script, a Python function, a custom
+agent framework. Saturate runs it.
 
 ---
 

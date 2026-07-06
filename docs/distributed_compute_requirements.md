@@ -296,8 +296,8 @@ per-seat or per-compute-hour SaaS fees acceptable for a personal fleet.
 **R10.5** SHOULD have an active maintainer community and a track record of
 stability on heterogeneous Linux/macOS deployments.
 
-**R10.6** SHOULD have a Python client library (workers and the OMH deliberation
-layer are Python; native Python integration reduces friction).
+**R10.6** SHOULD have a Python client library (workers are Python; native
+Python integration reduces friction).
 
 **R10.7** MAY provide a Rust client library or be implemented in Rust, for
 future integration with Rust-native cognitive loop components.
