@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import click, yaml, json, os
+import click, yaml, json, os, time
 from saturate.queue import Queue
 from saturate.runner import run_turn
 
@@ -15,7 +15,7 @@ def get_queue() -> Queue:
 
 @click.group()
 def main():
-    """Saturate — distributed loop execution fabric."""
+    """Saturate -- distributed loop execution fabric."""
     pass
 
 
@@ -100,3 +100,46 @@ def status(task_id):
     else:
         counts = q.counts()
         click.echo(f'pending: {counts["pending"]}  running: {counts["running"]}  done: {counts["done"]}')
+
+
+@main.command('start')
+@click.option(
+    '--interval', default=30, show_default=True, type=int,
+    help='Seconds between scheduler ticks.',
+)
+@click.option(
+    '--goals-dir', default='./goals', show_default=True,
+    help='Directory of .yaml goal specs to seed into the queue.',
+)
+def start_cmd(interval, goals_dir):
+    """Run the scheduler tick in a loop until Ctrl-C.
+
+    On each tick the scheduler:
+      1. Harvests completed tasks (writes summary.md).
+      2. Reaps stale running tasks (requeues them).
+      3. Seeds any new .yaml specs from --goals-dir.
+      4. Dispatches eligible pending tasks as subprocesses.
+
+    Use Ctrl-C (KeyboardInterrupt) to stop.
+    """
+    from saturate.queue_sqlite import SqliteQueue
+    from saturate.scheduler import scheduler_tick
+
+    base = get_base_dir()
+    q = SqliteQueue(base_dir=base)
+    goals_dir = os.path.abspath(goals_dir)
+
+    click.echo(
+        f'Saturate scheduler running  '
+        f'interval={interval}s  goals-dir={goals_dir}'
+    )
+    click.echo('Press Ctrl-C to stop.')
+
+    try:
+        while True:
+            n = scheduler_tick(q, goals_dir)
+            if n > 0:
+                click.echo(f'[tick] Dispatched {n} task(s)')
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        click.echo('\nScheduler stopped.')
