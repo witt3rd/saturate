@@ -15,9 +15,9 @@ Exit codes:
     0 — turn completed successfully (any outcome including 'terminal')
     1 — unexpected error
 """
+
 from __future__ import annotations
 
-import json
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -52,7 +52,9 @@ def main() -> int:
     # highest-priority pending task.  Claim and verify we got the right one.
     claimed = queue.claim()
     if claimed is None:
-        print(f"runner_proc: no pending task to claim (wanted {task_id})", file=sys.stderr)
+        print(
+            f"runner_proc: no pending task to claim (wanted {task_id})", file=sys.stderr
+        )
         return 1
 
     claimed_id: str = claimed.get("task_id", "")

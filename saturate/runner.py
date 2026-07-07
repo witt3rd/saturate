@@ -18,12 +18,12 @@ before calling run_turn.  This function:
 
 Phase 0: single-node, single-process, no parallelism.
 """
+
 from __future__ import annotations
 
 import os
 import pathlib
 import subprocess
-from typing import Optional
 
 import yaml
 
@@ -31,10 +31,10 @@ from saturate.executor import TurnContext, TurnSummary, make_executor
 from saturate.measure import MeasureResult, measure
 from saturate.queue import Queue
 
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def run_turn(task_id: str, queue: Queue) -> str:
     """Execute one turn of a loop task.  Returns outcome string.
@@ -61,20 +61,16 @@ def run_turn(task_id: str, queue: Queue) -> str:
     # 4. Build TurnContext
     # Queue stores its state directory as queue._state (a pathlib.Path).
     # We derive the base root from queue._state.parent to build output_path.
-    state_dir = queue._state           # root/state
-    base_root = state_dir.parent       # root
+    state_dir = queue._state  # root/state
+    base_root = state_dir.parent  # root
 
     context = TurnContext(
         turn_number=turn_n,
         baseline_metric=state.get("baseline"),
-        recent_turns=[
-            TurnSummary(**t) for t in state.get("recent_turns", [])[-5:]
-        ],
+        recent_turns=[TurnSummary(**t) for t in state.get("recent_turns", [])[-5:]],
         stagnation_n=state.get("stagnation_n", 0),
         state_path=str(state_dir / task_id),
-        output_path=task.get(
-            "output_path", str(base_root / "output" / task_id)
-        ),
+        output_path=task.get("output_path", str(base_root / "output" / task_id)),
     )
 
     # 5. Route by loop kind
@@ -129,9 +125,7 @@ def run_turn(task_id: str, queue: Queue) -> str:
         new_baseline = measure_result.value if prior is None else prior
 
     # 9. Update state and write audit record
-    new_stagnation = (
-        0 if kept else state.get("stagnation_n", 0) + 1
-    )
+    new_stagnation = 0 if kept else state.get("stagnation_n", 0) + 1
     recent = state.get("recent_turns", [])[-4:] + [
         {
             "turn_n": turn_n,
@@ -214,7 +208,9 @@ def _run_task_execution_turn(
 
     if next_task is None:
         # All tasks done — terminal success
-        queue.complete(task_id, {"terminal_reason": "success", "completed_tasks": completed})
+        queue.complete(
+            task_id, {"terminal_reason": "success", "completed_tasks": completed}
+        )
         return "terminal"
 
     # Build an augmented context with the specific task to execute
@@ -227,9 +223,7 @@ def _run_task_execution_turn(
 
     # Read the executor's report
     hyp_path = result.hypothesis_path
-    report = (
-        pathlib.Path(hyp_path).read_text() if os.path.exists(hyp_path) else ""
-    )
+    report = pathlib.Path(hyp_path).read_text() if os.path.exists(hyp_path) else ""
     # Executor must explicitly signal success — default to failed.
     # This prevents silent executor failures from being mistaken for success.
     task_failed = not report.upper().startswith("SUCCESS:")
@@ -243,31 +237,38 @@ def _run_task_execution_turn(
     new_state = {
         "turn_count": turn_n + 1,
         "stagnation_n": 0,
-        "recent_turns": state.get("recent_turns", [])[-4:] + [
-            {"turn_n": turn_n, "outcome": outcome, "value": float(len(completed))}
-        ],
+        "recent_turns": state.get("recent_turns", [])[-4:]
+        + [{"turn_n": turn_n, "outcome": outcome, "value": float(len(completed))}],
         "completed_tasks": completed,
         "baseline": float(len(completed)),
     }
     queue.write_state(task_id, new_state)
-    queue.record_turn(task_id, turn_n, {
-        "turn_n": turn_n,
-        "outcome": outcome,
-        "task_title": next_task["title"],
-        "task_failed": task_failed,
-        "hypothesis_path": hyp_path,
-    })
+    queue.record_turn(
+        task_id,
+        turn_n,
+        {
+            "turn_n": turn_n,
+            "outcome": outcome,
+            "task_title": next_task["title"],
+            "task_failed": task_failed,
+            "hypothesis_path": hyp_path,
+        },
+    )
 
     # Check max_turns safety net
     max_turns = spec.get("max_turns")
     if max_turns and new_state["turn_count"] >= max_turns:
-        queue.complete(task_id, {"terminal_reason": "exhausted", "final_state": new_state})
+        queue.complete(
+            task_id, {"terminal_reason": "exhausted", "final_state": new_state}
+        )
         return "terminal"
 
     # Check if all tasks now done
     remaining = [t for t in tasks if t["title"] not in completed]
     if not remaining:
-        queue.complete(task_id, {"terminal_reason": "success", "completed_tasks": completed})
+        queue.complete(
+            task_id, {"terminal_reason": "success", "completed_tasks": completed}
+        )
         return "terminal"
 
     queue.requeue(task_id)
@@ -278,10 +279,11 @@ def _run_task_execution_turn(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _load_spec(spec_path: str) -> dict:
     with open(spec_path) as f:
         spec = yaml.safe_load(f)
-    spec["_spec_path"] = spec_path   # carry path for relative resolution
+    spec["_spec_path"] = spec_path  # carry path for relative resolution
     return spec
 
 
@@ -292,13 +294,14 @@ def _parse_plan_tasks(plan_path: str) -> list[dict]:
     Returns [{"title": str, "body": str}, ...] in document order.
     """
     import re
+
     try:
         text = pathlib.Path(plan_path).read_text()
     except FileNotFoundError:
         return []
     tasks = []
     # Match ## Task N — Title  or  ## Task N: Title
-    pattern = re.compile(r'^## Task \d+\s*[—:-]+\s*(.+)$', re.MULTILINE)
+    pattern = re.compile(r"^## Task \d+\s*[—:-]+\s*(.+)$", re.MULTILINE)
     matches = list(pattern.finditer(text))
     for i, m in enumerate(matches):
         title = m.group(1).strip()
@@ -312,15 +315,12 @@ def _parse_plan_tasks(plan_path: str) -> list[dict]:
 def _git_commit_task(task_title: str, turn_n: int, report: str) -> None:
     """Commit completed task-execution work."""
     git_root = _find_git_root()
-    msg = (
-        f"task(turn {turn_n}): {task_title[:72]}\n\n"
-        f"{report[:500]}"
-    )
+    msg = f"task(turn {turn_n}): {task_title[:72]}\n\n{report[:500]}"
     subprocess.run(["git", "add", "-A"], cwd=git_root, capture_output=True)
     subprocess.run(
-        ["git", "commit", "-m", msg,
-         "--author=Donald Thompson <witt3rd@witt3rd.com>"],
-        cwd=git_root, capture_output=True,
+        ["git", "commit", "-m", msg, "--author=Donald Thompson <witt3rd@witt3rd.com>"],
+        cwd=git_root,
+        capture_output=True,
     )
 
 

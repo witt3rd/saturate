@@ -46,18 +46,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
 
 # Columns that have a dedicated column in the tasks table.
 # Anything posted with a key not in this set goes into the metadata JSON blob.
-_TASK_COLUMNS: frozenset[str] = frozenset({
-    "task_id", "name", "kind", "status",
-    "spec_path", "state_path", "output_path",
-    "priority", "submitted_at", "completed_at", "terminal_reason",
-})
+_TASK_COLUMNS: frozenset[str] = frozenset(
+    {
+        "task_id",
+        "name",
+        "kind",
+        "status",
+        "spec_path",
+        "state_path",
+        "output_path",
+        "priority",
+        "submitted_at",
+        "completed_at",
+        "terminal_reason",
+    }
+)
 
 _DDL = """\
 CREATE TABLE IF NOT EXISTS tasks (
@@ -98,6 +107,7 @@ CREATE INDEX IF NOT EXISTS idx_turns_task
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
@@ -117,6 +127,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
 # ---------------------------------------------------------------------------
 # SqliteQueue
 # ---------------------------------------------------------------------------
+
 
 class SqliteQueue:
     """SQLite-backed work queue compatible with the file-based Queue API."""

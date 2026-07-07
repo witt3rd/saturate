@@ -10,6 +10,7 @@ Runs one scheduling cycle:
 
 Phase 1: single-node, spawns `python -m saturate.runner_proc <task_id> <db_path>`.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -31,13 +32,14 @@ if TYPE_CHECKING:
 # Constants
 # ---------------------------------------------------------------------------
 
-_STALE_SECONDS: float = 120.0   # running task with no heartbeat for this long → requeued
-_CPU_SATURATION: float = 80.0   # don't launch new workers above this CPU%
+_STALE_SECONDS: float = 120.0  # running task with no heartbeat for this long → requeued
+_CPU_SATURATION: float = 80.0  # don't launch new workers above this CPU%
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def scheduler_tick(queue: "SqliteQueue", goals_dir: str) -> int:
     """Run one scheduler tick.  Returns number of tasks dispatched this tick.
@@ -67,6 +69,7 @@ def scheduler_tick(queue: "SqliteQueue", goals_dir: str) -> int:
 # ---------------------------------------------------------------------------
 # Step implementations
 # ---------------------------------------------------------------------------
+
 
 def _harvest_done(queue: "SqliteQueue") -> None:
     """Write summary.md to output_path for each done task (idempotent)."""
@@ -145,18 +148,30 @@ def _seed_goals(queue: "SqliteQueue", goals_dir: str) -> None:
         except Exception:
             continue
 
-        queue.post({
-            "task_id": task_id,
-            "name": spec.get("name", task_id),
-            "kind": spec.get("kind", "task-execution"),
-            "spec_path": str(spec_file),
-            "state_path": str(goals_path.parent / "state" / task_id),
-            "output_path": str(goals_path.parent / "output" / task_id),
-            "priority": int(spec.get("priority", 50)),
-            **{k: v for k, v in spec.items()
-               if k not in ("name", "kind", "spec_path", "state_path",
-                             "output_path", "priority")},
-        })
+        queue.post(
+            {
+                "task_id": task_id,
+                "name": spec.get("name", task_id),
+                "kind": spec.get("kind", "task-execution"),
+                "spec_path": str(spec_file),
+                "state_path": str(goals_path.parent / "state" / task_id),
+                "output_path": str(goals_path.parent / "output" / task_id),
+                "priority": int(spec.get("priority", 50)),
+                **{
+                    k: v
+                    for k, v in spec.items()
+                    if k
+                    not in (
+                        "name",
+                        "kind",
+                        "spec_path",
+                        "state_path",
+                        "output_path",
+                        "priority",
+                    )
+                },
+            }
+        )
 
 
 def _dispatch(queue: "SqliteQueue", now: datetime) -> int:
@@ -167,8 +182,7 @@ def _dispatch(queue: "SqliteQueue", now: datetime) -> int:
 
     # Build set of completed task_ids for dependency checking
     done_ids: set[str] = {
-        t["task_id"] for t in queue.list_tasks("done")
-        if "task_id" in t
+        t["task_id"] for t in queue.list_tasks("done") if "task_id" in t
     }
 
     # Filter eligible tasks
@@ -232,10 +246,10 @@ def _dispatch(queue: "SqliteQueue", now: datetime) -> int:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _score_task(task: dict, now: datetime) -> float:
     """Compute dispatch_score from a raw task dict (best-effort)."""
     try:
-        from datetime import timezone as tz
         deadline_iso: str | None = task.get("deadline")
         deadline = _parse_iso(deadline_iso) if deadline_iso else None
 
@@ -249,9 +263,7 @@ def _score_task(task: dict, now: datetime) -> float:
             output_path=task.get("output_path", ""),
             priority=int(task.get("priority", 50)),
             deadline=deadline,
-            estimated_duration_seconds=int(
-                task.get("estimated_duration_seconds", 0)
-            ),
+            estimated_duration_seconds=int(task.get("estimated_duration_seconds", 0)),
         )
         return dispatch_score(st, now)
     except Exception:

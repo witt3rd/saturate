@@ -7,6 +7,7 @@ relative to a baseline as: improved, regressed, crashed, or unchanged.
 Key invariant: crashed != regressed.
 A hypothesis that crashes the benchmark does NOT pollute baseline statistics.
 """
+
 from __future__ import annotations
 
 import json
@@ -57,7 +58,7 @@ def _run_once(command: str, extract: str, timeout: int) -> tuple[float, str]:
         return elapsed, raw
 
     if extract.startswith("regex:"):
-        pattern = extract[len("regex:"):]
+        pattern = extract[len("regex:") :]
         m = re.search(pattern, raw)
         if m is None:
             raise ValueError(
@@ -66,7 +67,7 @@ def _run_once(command: str, extract: str, timeout: int) -> tuple[float, str]:
         return float(m.group(1)), raw
 
     if extract.startswith("json:"):
-        key = extract[len("json:"):]
+        key = extract[len("json:") :]
         data = json.loads(raw)
         return float(data[key]), raw
 
@@ -89,27 +90,29 @@ def _classify(value: float, baseline: Optional[float], direction: str) -> Outcom
 
     if direction == "minimize":
         # Better = smaller value
-        if value < baseline * 0.99:   # at least 1% improvement
+        if value < baseline * 0.99:  # at least 1% improvement
             return "improved"
-        if value > baseline:          # any degradation
+        if value > baseline:  # any degradation
             return "regressed"
         return "unchanged"
 
     if direction == "maximize":
         # Better = larger value
-        if value > baseline * 1.01:   # at least 1% improvement
+        if value > baseline * 1.01:  # at least 1% improvement
             return "improved"
-        if value < baseline:          # any degradation
+        if value < baseline:  # any degradation
             return "regressed"
         return "unchanged"
 
-    raise ValueError(f"Unknown direction {direction!r}. Expected: 'minimize' or 'maximize'")
+    raise ValueError(
+        f"Unknown direction {direction!r}. Expected: 'minimize' or 'maximize'"
+    )
 
 
 def measure(
     command: str,
-    extract: str,           # 'wall_clock' | 'regex:<pattern>' | 'json:<key>'
-    direction: str,         # 'minimize' | 'maximize'
+    extract: str,  # 'wall_clock' | 'regex:<pattern>' | 'json:<key>'
+    direction: str,  # 'minimize' | 'maximize'
     baseline: Optional[float] = None,
     runs: int = 1,
     timeout: int = 300,

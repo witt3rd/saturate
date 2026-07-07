@@ -22,35 +22,35 @@ class SaturateTask:
     # ------------------------------------------------------------------
     # Identity (required at construction time)
     # ------------------------------------------------------------------
-    task_id: str                        # UUID string
+    task_id: str  # UUID string
     name: str
-    kind: str                           # one of the loop kind strings
+    kind: str  # one of the loop kind strings
 
     # ------------------------------------------------------------------
     # Execution paths (required at construction time)
     # ------------------------------------------------------------------
-    spec_path: str                      # path to loop spec file (read-only)
-    state_path: str                     # agreed location for intermediate state
-    output_path: str                    # where completed output is written
+    spec_path: str  # path to loop spec file (read-only)
+    state_path: str  # agreed location for intermediate state
+    output_path: str  # where completed output is written
 
     # ------------------------------------------------------------------
     # Scheduling (all optional / have sensible defaults)
     # ------------------------------------------------------------------
-    priority: int = 50                  # 0 (highest) to 100 (lowest)
+    priority: int = 50  # 0 (highest) to 100 (lowest)
     deadline: Optional[datetime] = None
     earliest_start: Optional[datetime] = None
 
     # ------------------------------------------------------------------
     # Hierarchy
     # ------------------------------------------------------------------
-    spawned_by: Optional[str] = None    # parent task_id; None = root
+    spawned_by: Optional[str] = None  # parent task_id; None = root
     depends_on: List[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------
     # Resources
     # ------------------------------------------------------------------
-    num_cpus: float = 1.0               # fractional OK -- e.g. 0.5
-    num_gpus: float = 0.0               # 0 = CPU-only (the common case)
+    num_cpus: float = 1.0  # fractional OK -- e.g. 0.5
+    num_gpus: float = 0.0  # 0 = CPU-only (the common case)
     required_node_class: Optional[str] = None  # e.g. "GPU_4090"
     estimated_duration_seconds: int = 0
 

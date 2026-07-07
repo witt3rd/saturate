@@ -9,31 +9,31 @@ from typing import List, Optional, Protocol, runtime_checkable
 @dataclass
 class TurnSummary:
     turn_n: int
-    outcome: str   # improved / regressed / crashed / unchanged
+    outcome: str  # improved / regressed / crashed / unchanged
     value: float
 
 
 @dataclass
 class TurnContext:
     turn_number: int
-    baseline_metric: Optional[float]   # None on turn 0
-    recent_turns: List[TurnSummary]    # last 5 accepted/discarded turns
-    stagnation_n: int                  # consecutive non-improved turns
-    state_path: str                    # executor writes hypothesis.md here
+    baseline_metric: Optional[float]  # None on turn 0
+    recent_turns: List[TurnSummary]  # last 5 accepted/discarded turns
+    stagnation_n: int  # consecutive non-improved turns
+    state_path: str  # executor writes hypothesis.md here
     output_path: str
 
 
 @dataclass
 class TurnResult:
-    hypothesis_path: str   # path to the hypothesis.md the executor wrote
+    hypothesis_path: str  # path to the hypothesis.md the executor wrote
 
 
 @runtime_checkable
 class Executor(Protocol):
     def execute_turn(
         self,
-        spec: dict,          # the full parsed loop spec
-        state: dict,         # current queue state dict
+        spec: dict,  # the full parsed loop spec
+        state: dict,  # current queue state dict
         context: TurnContext,
     ) -> TurnResult: ...
 
@@ -64,14 +64,16 @@ class HermesExecutor:
         result = subprocess.run(
             ["hermes", "-p", self.profile, "chat", "-q", msg],
             stdout=subprocess.PIPE,
-            stderr=None,    # inherit — streams directly to the terminal
+            stderr=None,  # inherit — streams directly to the terminal
             text=True,
         )
 
         hyp_path = os.path.join(context.state_path, "hypothesis.md")
         if not os.path.exists(hyp_path):
             # Fall back to whatever the CLI printed
-            output = result.stdout or result.stderr or "(no output from hermes executor)"
+            output = (
+                result.stdout or result.stderr or "(no output from hermes executor)"
+            )
             pathlib.Path(hyp_path).write_text(output)
 
         return TurnResult(hypothesis_path=hyp_path)
@@ -118,9 +120,7 @@ class HermesExecutor:
         task_title = current_task.get("title", "(unknown task)")
         task_body = current_task.get("body", "")
 
-        completed_list = (
-            "\n".join(f"  ✓ {t}" for t in completed) or "  (none yet)"
-        )
+        completed_list = "\n".join(f"  ✓ {t}" for t in completed) or "  (none yet)"
 
         return (
             f"You are executing a task-execution loop.\n"

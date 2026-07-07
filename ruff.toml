@@ -1,0 +1,12 @@
+line-length = 88
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "I"]
+ignore = [
+    "E501",  # line too long — string literals and SQL are exempt
+]
+
+[format]
+quote-style = "double"
+indent-style = "space"
