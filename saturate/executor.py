@@ -59,10 +59,12 @@ class HermesExecutor:
         msg_path = os.path.join(context.state_path, "task_message.md")
         pathlib.Path(msg_path).write_text(msg)
 
-        # hermes -p <profile> chat -q "<message>" — single-shot non-interactive
+        # hermes -p <profile> chat -q "<message>"
+        # Stream stderr live (shows Forge's progress); capture stdout for fallback.
         result = subprocess.run(
             ["hermes", "-p", self.profile, "chat", "-q", msg],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=None,    # inherit — streams directly to the terminal
             text=True,
         )
 
