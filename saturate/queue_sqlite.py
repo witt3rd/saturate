@@ -416,6 +416,46 @@ class SqliteQueue:
             return None
         return _row_to_dict(row)
 
+    def list_tasks(self, status: str) -> list[dict]:
+        """Return all tasks with the given status as a list of dicts."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM tasks WHERE status = ? ORDER BY priority ASC, submitted_at ASC",
+                (status,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [_row_to_dict(row) for row in rows]
+
+    def update_metadata(self, task_id: str, updates: dict) -> None:
+        """Merge *updates* into the metadata JSON blob for task_id."""
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN")
+            row = conn.execute(
+                "SELECT metadata FROM tasks WHERE task_id = ?",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                conn.execute("ROLLBACK")
+                raise ValueError(f"Task {task_id} not found")
+            meta: dict = json.loads(row["metadata"]) if row["metadata"] else {}
+            meta.update(updates)
+            conn.execute(
+                "UPDATE tasks SET metadata = ? WHERE task_id = ?",
+                (json.dumps(meta), task_id),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
     def turn_history(self, task_id: str) -> list[dict]:
         """Return all per-turn records sorted by turn_n ascending."""
         conn = self._connect()
