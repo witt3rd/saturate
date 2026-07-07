@@ -1,0 +1,12 @@
+name: phase1-implementation
+kind: task-execution
+goal: >
+  Implement Phase 1 of Saturate: replace the file-based queue with a proper
+  SQLite-backed queue, add the SaturateTask dataclass with full scheduling
+  fields, and implement the scheduler tick with idle detection and priority
+  dispatch. All existing tests must continue to pass. New code must be tested.
+plan_path: ./plans/phase1.md
+executor:
+  type: hermes
+  profile: forge
+memory: ./output/phase1/
