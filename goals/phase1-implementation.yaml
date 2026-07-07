@@ -9,4 +9,5 @@ plan_path: ./plans/phase1.md
 executor:
   type: hermes
   profile: forge
+max_turns: 20
 memory: ./output/phase1/

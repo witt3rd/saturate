@@ -76,6 +76,11 @@ class HermesExecutor:
 
     def _build_message(self, spec: dict, context: TurnContext) -> str:
         kind = spec.get("kind", "metric-optimization")
+
+        if kind == "task-execution":
+            return self._build_task_execution_message(spec, context)
+
+        # Default: metric-optimization message
         goal = spec.get("goal", "")
         recent = (
             "\n".join(
@@ -101,6 +106,42 @@ class HermesExecutor:
             f"\n"
             f"Saturate will measure the result and keep or revert automatically.\n"
             f"Do not loop. Do not measure. Execute exactly one hypothesis and exit."
+        )
+
+    def _build_task_execution_message(self, spec: dict, context: TurnContext) -> str:
+        goal = spec.get("goal", "")
+        current_task = spec.get("_current_task", {})
+        completed = spec.get("_completed_tasks", [])
+        plan_path = spec.get("plan_path", "(no plan)")
+        task_title = current_task.get("title", "(unknown task)")
+        task_body = current_task.get("body", "")
+
+        completed_list = (
+            "\n".join(f"  ✓ {t}" for t in completed) or "  (none yet)"
+        )
+
+        return (
+            f"You are executing a task-execution loop.\n"
+            f"\n"
+            f"Overall goal: {goal}\n"
+            f"Plan: {plan_path}\n"
+            f"\n"
+            f"Completed tasks so far:\n"
+            f"{completed_list}\n"
+            f"\n"
+            f"YOUR TASK FOR THIS TURN:\n"
+            f"  {task_title}\n"
+            f"\n"
+            f"{task_body}\n"
+            f"\n"
+            f"Instructions:\n"
+            f"1. Implement this task completely — write the code, run the tests, fix any issues\n"
+            f"2. When done, write a completion report to: {context.state_path}/hypothesis.md\n"
+            f"   Format: start with 'SUCCESS: ' or 'FAILED: ', then describe what you did\n"
+            f"   Example: 'SUCCESS: Implemented SaturateTask dataclass in saturate/task.py. All 8 new tests pass.'\n"
+            f"3. Commit your work with git before exiting\n"
+            f"\n"
+            f"Do NOT work on any other task. Focus only on: {task_title}"
         )
 
 
