@@ -168,8 +168,7 @@ executor:
 memory:   ./output/phase1/
 ```
 
-And `plans/phase1.md` is the Phase 1 roadmap from ARCHITECTURE.md written as
-an OMH-style task list:
+And `plans/phase1.md` is the Phase 1 roadmap from ARCHITECTURE.md written as a task list:
 
 ```markdown
 # Phase 1 Implementation Plan
