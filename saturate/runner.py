@@ -121,7 +121,10 @@ def run_turn(task_id: str, queue: Queue) -> str:
             capture_output=True,
             cwd=git_root,
         )
-        new_baseline = state.get("baseline")  # unchanged
+        # Turn 0 (baseline=None): record the first measurement so subsequent
+        # turns have something to compare against.
+        prior = state.get("baseline")
+        new_baseline = measure_result.value if prior is None else prior
 
     # 9. Update state and write audit record
     new_stagnation = (
