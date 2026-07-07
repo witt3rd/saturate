@@ -493,6 +493,162 @@ metric improvement — this is the reward-hacking guard.
 
 ---
 
+## The Executor — What Actually Does the Work
+
+The loop runner knows *when* to call an agent and *what to do with the result*.
+The **Executor** is the adapter that knows *how to call a specific agent
+implementation*. These are separate concerns.
+
+Saturate defines a protocol. Every agent framework is an implementation of it.
+Saturate has zero knowledge of what is inside an executor.
+
+### The Executor Protocol
+
+```python
+class Executor(Protocol):
+    def execute_turn(
+        self,
+        spec:    LoopSpec,        # the full loop specification (read-only)
+        state:   LoopState,       # current baseline, turn count, stagnation count
+        context: TurnContext,     # abbreviated history of prior turns
+    ) -> TurnResult: ...
+```
+
+`TurnResult` carries one thing: the path to a `hypothesis.md` file the executor
+wrote describing what change it made (or proposes to make). Saturate reads
+that file, runs `saturate.measure`, runs the correctness gate, and keeps or
+reverts. The executor reasons; Saturate bookkeeps.
+
+### Declared in the Loop Spec
+
+Every loop spec declares its executor:
+
+```yaml
+kind:     metric-optimization
+goal:     Reduce CI build time by 20%
+metric:
+  command:   npm run build
+  extract:   wall_clock
+  direction: minimize
+executor:
+  type:    hermes
+  profile: forge            # Hermes profile to invoke
+memory:   ./output/build-optimizer/
+```
+
+```yaml
+executor:
+  type:    shell
+  command: ./agents/my-optimizer.sh   # arbitrary executable
+```
+
+```yaml
+executor:
+  type:    http
+  url:     http://localhost:9000/turn  # POST endpoint speaking the protocol
+```
+
+### What the Executor Receives
+
+Saturate constructs a `TurnContext` before each invocation. The executor sees
+exactly what it needs — no more:
+
+```python
+@dataclass
+class TurnContext:
+    turn_number:     int
+    baseline_metric: Optional[float]     # None on turn 0
+    recent_turns:    List[TurnSummary]   # last N accepted/discarded with metric
+    stagnation_n:    int                 # consecutive discards since last accept
+    state_path:      str                 # where to write hypothesis.md
+    output_path:     str                 # where to write final output
+```
+
+### v1 Executor Implementations
+
+#### HermesExecutor
+
+Invokes a Hermes profile via the `hermes` CLI. Saturate constructs a
+self-contained task message from the spec and turn context, then invokes:
+
+```bash
+hermes -p {profile} --once "{task_message}"
+```
+
+The task message Forge receives on each turn:
+
+```
+You are executing turn {n} of a {kind} loop.
+
+Goal: {spec.goal}
+Current baseline: {context.baseline_metric}
+Recent turns: {context.recent_turns}
+Stagnation: {context.stagnation_n} consecutive turns with no improvement
+
+Your job this turn:
+1. Generate ONE hypothesis — a concrete change that might improve the metric
+2. Apply it (edit files, run commands, whatever is needed)
+3. Write a description of what you changed to: {context.state_path}/hypothesis.md
+   Format: one paragraph, concrete, describing exactly what changed and why
+
+Saturate will measure the result and keep or revert automatically.
+Do not loop. Do not measure. Execute exactly one hypothesis and exit.
+```
+
+Forge does the reasoning and the work. Saturate does everything else.
+
+#### ShellExecutor
+
+Invokes an arbitrary executable. Saturate passes context as environment
+variables; the script writes `hypothesis.md` to `$SATURATE_STATE_PATH`.
+
+```python
+class ShellExecutor:
+    def execute_turn(self, spec, state, context) -> TurnResult:
+        env = {
+            "SATURATE_GOAL":          spec.goal,
+            "SATURATE_TURN":          str(context.turn_number),
+            "SATURATE_BASELINE":      str(context.baseline_metric or ""),
+            "SATURATE_STATE_PATH":    context.state_path,
+            "SATURATE_OUTPUT_PATH":   context.output_path,
+        }
+        subprocess.run([self.command], env={**os.environ, **env}, check=True)
+        return TurnResult(hypothesis_path=f"{context.state_path}/hypothesis.md")
+```
+
+Any executable — Python script, shell script, compiled binary — is a valid
+executor. No SDK required.
+
+#### HTTPExecutor
+
+POSTs the `TurnContext` as JSON to an endpoint, receives `TurnResult` as JSON.
+Allows remote executors, microservice agents, or any language that speaks HTTP.
+
+```python
+class HTTPExecutor:
+    def execute_turn(self, spec, state, context) -> TurnResult:
+        resp = requests.post(self.url, json={
+            "spec":    asdict(spec),
+            "context": asdict(context),
+        })
+        return TurnResult(**resp.json())
+```
+
+### Future Executor Implementations
+
+Any agent framework can be wrapped as an executor. The protocol is stable;
+implementations are additive and never require changes to the scheduler or
+runner.
+
+```python
+class ClaudeCodeExecutor:  ...   # cc CLI
+class LangChainExecutor:   ...   # LangChain agent
+class CrewAIExecutor:      ...   # CrewAI crew
+class MCPExecutor:         ...   # any MCP-compatible tool server
+```
+
+---
+
 ## The Loop Runner
 
 A loop runner executes one turn of the hypothesis/measure/keep-or-revert cycle
@@ -504,9 +660,10 @@ runner receives: task_id, spec_path, state_path, output_path
 runner does:
   1. load spec
   2. load current state (baseline metric, turn count, stagnation count)
-  3. generate hypothesis   ← calls external agent/API
-  4. apply tentatively     ← modifies files, builds, etc.
-  5. measure               ← saturate.measure → scalar
+  3. instantiate executor (from spec.executor)
+  4. build TurnContext from state
+  5. executor.execute_turn(spec, state, context)  ← agent does the work
+  6. measure               ← saturate.measure → scalar
   6. correctness gate      ← run spec.correctness command
   7. keep or revert
   8. write_state(updated state)
