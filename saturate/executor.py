@@ -59,8 +59,9 @@ class HermesExecutor:
         msg_path = os.path.join(context.state_path, "task_message.md")
         pathlib.Path(msg_path).write_text(msg)
 
+        # hermes -p <profile> chat -q "<message>" — single-shot non-interactive
         result = subprocess.run(
-            ["hermes", "-p", self.profile, "run", "--message", msg],
+            ["hermes", "-p", self.profile, "chat", "-q", msg],
             capture_output=True,
             text=True,
         )
@@ -68,9 +69,8 @@ class HermesExecutor:
         hyp_path = os.path.join(context.state_path, "hypothesis.md")
         if not os.path.exists(hyp_path):
             # Fall back to whatever the CLI printed
-            pathlib.Path(hyp_path).write_text(
-                result.stdout or "(no output from hermes executor)"
-            )
+            output = result.stdout or result.stderr or "(no output from hermes executor)"
+            pathlib.Path(hyp_path).write_text(output)
 
         return TurnResult(hypothesis_path=hyp_path)
 

@@ -225,13 +225,14 @@ def _run_task_execution_turn(
     spec_with_task = {**spec, "_current_task": next_task, "_completed_tasks": completed}
     result = executor.execute_turn(spec_with_task, state, context)
 
-    # Read the executor's report — did it succeed?
+    # Read the executor's report
     hyp_path = result.hypothesis_path
     report = (
         pathlib.Path(hyp_path).read_text() if os.path.exists(hyp_path) else ""
     )
-    # Simple heuristic: executor signals failure by writing FAILED in the report
-    task_failed = "FAILED" in report.upper() and "SUCCESS" not in report.upper()
+    # Executor must explicitly signal success — default to failed.
+    # This prevents silent executor failures from being mistaken for success.
+    task_failed = not report.upper().startswith("SUCCESS:")
 
     outcome = "regressed" if task_failed else "improved"
 
