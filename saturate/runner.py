@@ -197,11 +197,9 @@ def _run_task_execution_turn(
     """
     plan_path = spec.get("plan_path", "")
     if not os.path.isabs(plan_path):
-        # Resolve relative to spec file location
-        plan_path = os.path.join(
-            os.path.dirname(os.path.abspath(spec.get("_spec_path", "."))),
-            plan_path,
-        )
+        # Resolve relative to cwd (where 'saturate run' is invoked),
+        # which is the project root — not the spec file's directory.
+        plan_path = os.path.join(os.getcwd(), plan_path)
 
     # Task completion is tracked in state under 'completed_tasks' (list of task titles)
     completed = state.get("completed_tasks", [])
