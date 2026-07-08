@@ -47,6 +47,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+
 class HumanGatedViolation(Exception):
     """Raised when complete() is called on a HUMAN_GATED task without confirmed_by_human=True."""
 
@@ -207,6 +208,7 @@ class SqliteQueue:
         """
         from loop_spec import ClarificationSpec
         from loop_spec import load_spec as _load_spec
+
         task = dict(task)  # don't mutate caller's dict
         if "task_id" not in task:
             task["task_id"] = str(uuid.uuid4())
@@ -308,7 +310,9 @@ class SqliteQueue:
         state_dir.mkdir(parents=True, exist_ok=True)
         (state_dir / "state.json").write_text(json.dumps(state, indent=2))
 
-    def complete(self, task_id: str, output: dict, *, confirmed_by_human: bool = False) -> None:
+    def complete(
+        self, task_id: str, output: dict, *, confirmed_by_human: bool = False
+    ) -> None:
         """Set status='done', completed_at=now, merge output into metadata.
 
         Raises ``HumanGatedViolation`` if the task has ``human_gated=1`` and
