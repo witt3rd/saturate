@@ -213,7 +213,13 @@ def test_integration_queue_counts_after_terminal(tmp_path):
 
 
 def test_integration_does_not_touch_saturate_repo(tmp_path):
-    """The loop's git operations must never affect the Saturate source tree."""
+    """The loop's git operations must never affect the Saturate source tree.
+
+    Specifically: files outside the isolated worktree must not be modified
+    by git operations (add/commit/revert) that the runner performs.
+    Excluded from the dirty-tree check: uv.lock (package manager), .pyc
+    files and __pycache__ directories (Python bytecode from the test runner).
+    """
     import os
     saturate_root = Path(__file__).parent.parent
 
@@ -239,6 +245,14 @@ def test_integration_does_not_touch_saturate_repo(tmp_path):
         capture_output=True,
         text=True,
     )
-    assert result.stdout.strip() == "", (
-        f"Saturate source tree was dirtied by the loop:\n{result.stdout}"
+    # Filter out files legitimately touched by the test environment:
+    # uv.lock (package manager), *.pyc/__pycache__ (bytecode)
+    excluded_patterns = {"uv.lock", ".pyc", "__pycache__"}
+    dirty_lines = [
+        line for line in result.stdout.splitlines()
+        if line.strip() and not any(pat in line for pat in excluded_patterns)
+    ]
+    assert dirty_lines == [], (
+        f"Saturate source tree was dirtied by the loop runner:\n"
+        + "\n".join(dirty_lines)
     )
