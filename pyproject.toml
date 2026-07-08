@@ -11,6 +11,7 @@ dependencies = [
     "click>=8.0",
     "pyyaml>=6.0",
     "psutil>=5.9",
+    "loop-spec-py @ git+https://github.com/witt3rd/loop-spec.git#subdirectory=python",
 ]
 
 [project.scripts]
@@ -20,6 +21,9 @@ saturate = "saturate.cli:main"
 dev = [
     "pytest>=7.0",
 ]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatchling.build]
 include = ["saturate/**"]
