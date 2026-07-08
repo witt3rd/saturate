@@ -154,26 +154,29 @@ def test_shell_executor_does_not_raise_on_nonzero_exit(tmp_path: pathlib.Path) -
 # ---------------------------------------------------------------------------
 
 def test_make_executor_hermes() -> None:
-    exe = make_executor({"type": "hermes", "profile": "forge"})
+    from loop_spec import ExecutorSpec
+    exe = make_executor(ExecutorSpec(type="hermes", profile="forge"))
     assert isinstance(exe, HermesExecutor)
     assert exe.profile == "forge"
 
 
 def test_make_executor_shell() -> None:
-    exe = make_executor({"type": "shell", "command": "echo hi"})
+    from loop_spec import ExecutorSpec
+    exe = make_executor(ExecutorSpec(type="shell", command="echo hi"))
     assert isinstance(exe, ShellExecutor)
     assert exe.command == "echo hi"
 
 
 def test_make_executor_default_is_shell() -> None:
-    """When 'type' is absent the factory should default to ShellExecutor."""
-    exe = make_executor({"command": "echo default"})
+    """When executor_spec is None the factory should default to ShellExecutor."""
+    exe = make_executor(None)
     assert isinstance(exe, ShellExecutor)
 
 
 def test_make_executor_unknown() -> None:
-    with pytest.raises(ValueError, match="bogus"):
-        make_executor({"type": "bogus"})
+    from loop_spec import ExecutorSpec
+    with pytest.raises(NotImplementedError):
+        make_executor(ExecutorSpec(type="http"))
 
 
 # ---------------------------------------------------------------------------

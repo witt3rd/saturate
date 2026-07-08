@@ -1,3 +1,14 @@
+from loop_spec import (
+    ClarificationSpec,
+    ConsensusSpec,
+    ExecutorSpec,
+    LoopSpec,
+    MetricOptimizationSpec,
+    SelectionSpec,
+    TaskExecutionSpec,
+    TerminalConditions,
+    load_spec,
+)
 from saturate.executor import (
     Executor,
     HermesExecutor,
@@ -12,6 +23,17 @@ from saturate.queue import Queue
 from saturate.runner import run_turn
 
 __all__ = [
+    # loop_spec types
+    "load_spec",
+    "LoopSpec",
+    "MetricOptimizationSpec",
+    "TaskExecutionSpec",
+    "ClarificationSpec",
+    "ConsensusSpec",
+    "SelectionSpec",
+    "ExecutorSpec",
+    "TerminalConditions",
+    # saturate primitives
     "measure",
     "MeasureResult",
     "Queue",

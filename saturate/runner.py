@@ -6,14 +6,15 @@ The caller (CLI's ``saturate run``) is responsible for claim()ing the task
 before calling run_turn.  This function:
 
 1. Loads the task manifest from running/.
-2. Reads the loop spec from task['spec_path'].
+2. Reads the loop spec from task['spec_path'] via loop_spec.load_spec().
 3. Initialises or restores loop state.
 4. Builds TurnContext and calls executor.execute_turn().
 5. Measures the metric via saturate.measure.measure().
 6. Runs the correctness gate on improvements.
 7. Commits (git add -A && git commit) on improved+correct, else reverts.
+   All git operations are scoped to spec.repo — never the Saturate source tree.
 8. Persists state and writes a per-turn audit record.
-9. Checks terminal conditions (max_turns, stagnation_n).
+9. Checks terminal conditions (max_iterations, plateau_count).
 10. Returns one of: 'improved', 'regressed', 'crashed', 'unchanged', 'terminal'.
 
 Phase 0: single-node, single-process, no parallelism.
@@ -25,9 +26,15 @@ import os
 import pathlib
 import subprocess
 
-import yaml
+from loop_spec import (
+    ClarificationSpec,
+    LoopSpec,
+    MetricOptimizationSpec,
+    TaskExecutionSpec,
+    load_spec,
+)
 
-from saturate.executor import TurnContext, TurnSummary, make_executor
+from saturate.executor import TurnContext, TurnResult, TurnSummary, make_executor
 from saturate.measure import MeasureResult, measure
 from saturate.queue import Queue
 
@@ -51,59 +58,49 @@ def run_turn(task_id: str, queue: Queue) -> str:
     if task is None:
         raise ValueError(f"Task {task_id} not found in queue")
 
-    # 2. Load loop spec
-    spec = _load_spec(task["spec_path"])
+    # 2. Load loop spec via loop_spec standard
+    spec: LoopSpec = load_spec(task["spec_path"])
 
     # 3. Load or initialise state
     state = queue.read_state(task_id) or _initial_state()
     turn_n = state.get("turn_count", 0)
 
     # 4. Build TurnContext
-    # Queue stores its state directory as queue._state (a pathlib.Path).
-    # We derive the base root from queue._state.parent to build output_path.
     state_dir = queue._state  # root/state
-    base_root = state_dir.parent  # root
-
     context = TurnContext(
         turn_number=turn_n,
         baseline_metric=state.get("baseline"),
         recent_turns=[TurnSummary(**t) for t in state.get("recent_turns", [])[-5:]],
         stagnation_n=state.get("stagnation_n", 0),
         state_path=str(state_dir / task_id),
-        output_path=task.get("output_path", str(base_root / "output" / task_id)),
+        output_path=spec.output_dir,
     )
 
     # 5. Route by loop kind
-    kind = spec.get("kind", "metric-optimization")
-    if kind == "task-execution":
+    if isinstance(spec, (ClarificationSpec, TaskExecutionSpec)):
         return _run_task_execution_turn(task_id, spec, state, context, turn_n, queue)
 
-    # --- metric-optimization (and all other kinds for now) ---
+    # --- MetricOptimizationSpec (and all other kinds for now) ---
+    assert isinstance(spec, MetricOptimizationSpec)
 
-    executor = make_executor(
-        spec.get("executor", {"type": "shell", "command": "echo no-executor"})
-    )
+    executor = make_executor(spec.executor)
     result = executor.execute_turn(spec, state, context)
 
     # 6. Measure the metric
-    metric_spec = spec.get("metric", {})
     measure_result = measure(
-        command=metric_spec.get("command", "echo 0"),
-        extract=metric_spec.get("extract", "wall_clock"),
-        direction=metric_spec.get("direction", "minimize"),
+        command=spec.evaluate or "echo 0",
+        extract=spec.evaluate_extract,
+        direction="minimize" if spec.direction == "lower_is_better" else "maximize",
         baseline=state.get("baseline"),
     )
 
     # 7. Correctness gate (only runs when metric improved)
     correct = True
-    if measure_result.outcome == "improved":
-        correctness_spec = spec.get("correctness", {})
-        cmd = correctness_spec.get("command")
-        if cmd:
-            r = subprocess.run(cmd, shell=True, capture_output=True)
-            correct = r.returncode == 0
+    if measure_result.outcome == "improved" and spec.correctness:
+        r = subprocess.run(spec.correctness, shell=True, capture_output=True)
+        correct = r.returncode == 0
 
-    # 8. Keep or revert
+    # 8. Keep or revert — scoped strictly to spec.repo
     kept = measure_result.outcome == "improved" and correct
     if kept:
         hyp_path = result.hypothesis_path
@@ -112,15 +109,10 @@ def run_turn(task_id: str, queue: Queue) -> str:
             if os.path.exists(hyp_path)
             else "no hypothesis"
         )
-        _git_commit(turn_n, hypothesis, measure_result)
+        _git_commit(turn_n, hypothesis, measure_result, repo=spec.repo)
         new_baseline = measure_result.value
     else:
-        git_root = _find_git_root()
-        subprocess.run(
-            ["git", "checkout", "--", "."],
-            capture_output=True,
-            cwd=git_root,
-        )
+        _git_revert(repo=spec.repo)
         prior = state.get("baseline")
         new_baseline = measure_result.value if prior is None else prior
 
@@ -154,17 +146,17 @@ def run_turn(task_id: str, queue: Queue) -> str:
     )
 
     # 10. Check terminal conditions
-    max_turns = spec.get("max_turns")
-    stagnation_limit = spec.get("stagnation_n")
+    max_iter = spec.terminal.max_iterations
+    plateau = spec.terminal.plateau_count
 
-    if max_turns and new_state["turn_count"] >= max_turns:
+    if new_state["turn_count"] >= max_iter:
         queue.complete(
             task_id,
             {"terminal_reason": "exhausted", "final_state": new_state},
         )
         return "terminal"
 
-    if stagnation_limit and new_stagnation >= stagnation_limit:
+    if new_stagnation >= plateau:
         queue.complete(
             task_id,
             {"terminal_reason": "stalled", "final_state": new_state},
@@ -177,29 +169,20 @@ def run_turn(task_id: str, queue: Queue) -> str:
 
 def _run_task_execution_turn(
     task_id: str,
-    spec: dict,
+    spec: TaskExecutionSpec,
     state: dict,
     context: TurnContext,
     turn_n: int,
     queue: Queue,
 ) -> str:
-    """One turn of a task-execution loop.
-
-    Reads the plan file, finds the next incomplete task, routes it to the
-    executor, records the result, and checks for plan completion.
-    No metric measurement — done when all tasks are marked complete.
-    """
-    plan_path = spec.get("plan_path", "")
-    if not os.path.isabs(plan_path):
-        # Resolve relative to cwd (where 'saturate run' is invoked),
-        # which is the project root — not the spec file's directory.
+    """One turn of a task-execution loop."""
+    plan_path = spec.plan_path or ""
+    if plan_path and not os.path.isabs(plan_path):
         plan_path = os.path.join(os.getcwd(), plan_path)
 
-    # Task completion is tracked in state under 'completed_tasks' (list of task titles)
     completed = state.get("completed_tasks", [])
     tasks = _parse_plan_tasks(plan_path)
 
-    # Find next incomplete task (simple sequential execution for Phase 0)
     next_task = None
     for t in tasks:
         if t["title"] not in completed:
@@ -207,32 +190,27 @@ def _run_task_execution_turn(
             break
 
     if next_task is None:
-        # All tasks done — terminal success
         queue.complete(
             task_id, {"terminal_reason": "success", "completed_tasks": completed}
         )
         return "terminal"
 
-    # Build an augmented context with the specific task to execute
-    executor = make_executor(
-        spec.get("executor", {"type": "shell", "command": "echo no-executor"})
-    )
-    # Inject current task into spec for the executor's message builder
-    spec_with_task = {**spec, "_current_task": next_task, "_completed_tasks": completed}
+    executor = make_executor(spec.executor)
+    spec_with_task = {
+        **spec.model_dump(),
+        "_current_task": next_task,
+        "_completed_tasks": completed,
+    }
     result = executor.execute_turn(spec_with_task, state, context)
 
-    # Read the executor's report
     hyp_path = result.hypothesis_path
     report = pathlib.Path(hyp_path).read_text() if os.path.exists(hyp_path) else ""
-    # Executor must explicitly signal success — default to failed.
-    # This prevents silent executor failures from being mistaken for success.
     task_failed = not report.upper().startswith("SUCCESS:")
-
     outcome = "regressed" if task_failed else "improved"
 
     if not task_failed:
         completed = completed + [next_task["title"]]
-        _git_commit_task(next_task["title"], turn_n, report)
+        _git_commit_task(next_task["title"], turn_n, report, repo=spec.repo)
 
     new_state = {
         "turn_count": turn_n + 1,
@@ -255,15 +233,12 @@ def _run_task_execution_turn(
         },
     )
 
-    # Check max_turns safety net
-    max_turns = spec.get("max_turns")
-    if max_turns and new_state["turn_count"] >= max_turns:
+    if new_state["turn_count"] >= spec.terminal.max_iterations:
         queue.complete(
             task_id, {"terminal_reason": "exhausted", "final_state": new_state}
         )
         return "terminal"
 
-    # Check if all tasks now done
     remaining = [t for t in tasks if t["title"] not in completed]
     if not remaining:
         queue.complete(
@@ -280,19 +255,8 @@ def _run_task_execution_turn(
 # ---------------------------------------------------------------------------
 
 
-def _load_spec(spec_path: str) -> dict:
-    with open(spec_path) as f:
-        spec = yaml.safe_load(f)
-    spec["_spec_path"] = spec_path  # carry path for relative resolution
-    return spec
-
-
 def _parse_plan_tasks(plan_path: str) -> list[dict]:
-    """Parse a markdown plan file into a list of task dicts.
-
-    Looks for '## Task N — <title>' headings and extracts title + body.
-    Returns [{"title": str, "body": str}, ...] in document order.
-    """
+    """Parse a markdown plan file into a list of task dicts."""
     import re
 
     try:
@@ -300,7 +264,6 @@ def _parse_plan_tasks(plan_path: str) -> list[dict]:
     except FileNotFoundError:
         return []
     tasks = []
-    # Match ## Task N — Title  or  ## Task N: Title
     pattern = re.compile(r"^## Task \d+\s*[—:-]+\s*(.+)$", re.MULTILINE)
     matches = list(pattern.finditer(text))
     for i, m in enumerate(matches):
@@ -312,14 +275,29 @@ def _parse_plan_tasks(plan_path: str) -> list[dict]:
     return tasks
 
 
-def _git_commit_task(task_title: str, turn_n: int, report: str) -> None:
-    """Commit completed task-execution work."""
-    git_root = _find_git_root()
+def _git_revert(repo: str | None) -> None:
+    """Revert uncommitted changes in the target repo.
+
+    If repo is None, no-op — the loop does not manage a git working tree.
+    """
+    if repo is None:
+        return
+    subprocess.run(
+        ["git", "checkout", "--", "."],
+        capture_output=True,
+        cwd=repo,
+    )
+
+
+def _git_commit_task(task_title: str, turn_n: int, report: str, repo: str | None) -> None:
+    """Commit completed task-execution work to the target repo."""
+    if repo is None:
+        return
     msg = f"task(turn {turn_n}): {task_title[:72]}\n\n{report[:500]}"
-    subprocess.run(["git", "add", "-A"], cwd=git_root, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True)
     subprocess.run(
         ["git", "commit", "-m", msg, "--author=Donald Thompson <witt3rd@witt3rd.com>"],
-        cwd=git_root,
+        cwd=repo,
         capture_output=True,
     )
 
@@ -333,25 +311,15 @@ def _initial_state() -> dict:
     }
 
 
-def _find_git_root() -> str:
-    """Walk up from cwd until we find a .git directory."""
-    p = pathlib.Path.cwd()
-    while p != p.parent:
-        if (p / ".git").exists():
-            return str(p)
-        p = p.parent
-    # Fallback: treat cwd as git root (harmless if there is no git repo)
-    return str(pathlib.Path.cwd())
-
-
-def _git_commit(turn_n: int, hypothesis: str, result: MeasureResult) -> None:
-    """Stage everything and commit with a structured message."""
-    git_root = _find_git_root()
+def _git_commit(turn_n: int, hypothesis: str, result: MeasureResult, repo: str | None) -> None:
+    """Stage everything and commit with a structured message to the target repo."""
+    if repo is None:
+        return
     msg = (
         f"turn {turn_n}: {result.outcome} (value={result.value:.4f})\n\n"
         f"{hypothesis[:500]}"
     )
-    subprocess.run(["git", "add", "-A"], cwd=git_root, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True)
     subprocess.run(
         [
             "git",
@@ -360,6 +328,6 @@ def _git_commit(turn_n: int, hypothesis: str, result: MeasureResult) -> None:
             msg,
             "--author=Donald Thompson <witt3rd@witt3rd.com>",
         ],
-        cwd=git_root,
+        cwd=repo,
         capture_output=True,
     )
