@@ -62,7 +62,6 @@ class BudgetExhausted(Exception):
     """
 
 
-
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -500,7 +499,9 @@ class SqliteQueue:
         finally:
             conn.close()
 
-    def record_spend(self, task_id: str, tokens: int = 0, cost_usd: float = 0.0) -> None:
+    def record_spend(
+        self, task_id: str, tokens: int = 0, cost_usd: float = 0.0
+    ) -> None:
         """Accumulate token and cost spend against a running task.
 
         Called by the execution fabric after each turn to track cumulative budget

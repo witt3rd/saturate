@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from saturate.queue_sqlite import HumanGatedViolation, SqliteQueue
+from saturate.queue_sqlite import BudgetExhausted, HumanGatedViolation, SqliteQueue
 
 
 # ---------------------------------------------------------------------------

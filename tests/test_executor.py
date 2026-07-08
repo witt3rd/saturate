@@ -175,8 +175,12 @@ def test_make_executor_default_is_shell() -> None:
 
 def test_make_executor_unknown() -> None:
     from loop_spec import ExecutorSpec
-    with pytest.raises(NotImplementedError):
-        make_executor(ExecutorSpec(type="http"))
+    from pydantic import ValidationError
+    # loop-spec now validates executor fields at construction time --
+    # ExecutorSpec(type="http") raises ValidationError because url is required.
+    # That is the correct behavior: malformed specs never reach make_executor.
+    with pytest.raises(ValidationError):
+        ExecutorSpec(type="http")
 
 
 # ---------------------------------------------------------------------------
