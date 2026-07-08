@@ -28,7 +28,7 @@ class MeasureResult:
     raw: str
 
 
-def _run_once(command: str, extract: str, timeout: int) -> tuple[float, str]:
+def _run_once(command: str, extract: str, timeout: int, cwd: str | None = None) -> tuple[float, str]:
     """
     Run command once and return (extracted_value, raw_stdout).
 
@@ -44,6 +44,7 @@ def _run_once(command: str, extract: str, timeout: int) -> tuple[float, str]:
         capture_output=True,
         text=True,
         timeout=timeout,
+        cwd=cwd,
     )
     elapsed = time.perf_counter() - start
 
@@ -116,6 +117,7 @@ def measure(
     baseline: Optional[float] = None,
     runs: int = 1,
     timeout: int = 300,
+    cwd: str | None = None,
 ) -> MeasureResult:
     """
     Run ``command`` (via shell), extract a scalar, and classify against baseline.
@@ -144,7 +146,7 @@ def measure(
 
     for _ in range(runs):
         try:
-            val, raw = _run_once(command, extract, timeout)
+            val, raw = _run_once(command, extract, timeout, cwd=cwd)
             values.append(val)
             last_raw = raw
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:

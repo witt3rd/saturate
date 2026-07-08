@@ -49,6 +49,9 @@ def run_turn(task_id: str, queue: Queue) -> str:
 
     # Clone spec.repo (git URL) into an isolated worktree once; reuse thereafter
     work_dir = _resolve_worktree(spec.repo, task_state_path)
+    # Use work_dir as cwd for all subprocess calls to avoid dirtying the
+    # Saturate source tree. Fall back to state dir when no worktree exists.
+    run_cwd = work_dir or task_state_path
 
     context = TurnContext(
         turn_number=turn_n,
@@ -74,11 +77,12 @@ def run_turn(task_id: str, queue: Queue) -> str:
         extract=spec.evaluate_extract,
         direction="minimize" if spec.direction == "lower_is_better" else "maximize",
         baseline=state.get("baseline"),
+        cwd=run_cwd,
     )
 
     correct = True
     if measure_result.outcome == "improved" and spec.correctness:
-        r = subprocess.run(spec.correctness, shell=True, capture_output=True)
+        r = subprocess.run(spec.correctness, shell=True, capture_output=True, cwd=run_cwd)
         correct = r.returncode == 0
 
     kept = measure_result.outcome == "improved" and correct
@@ -151,7 +155,9 @@ def _run_task_execution_turn(
 ) -> str:
     plan_path = spec.plan_path or ""
     if plan_path and not os.path.isabs(plan_path):
-        plan_path = os.path.join(os.getcwd(), plan_path)
+        # Resolve relative to work_dir (the isolated clone), not the Saturate root
+        base = work_dir or os.path.dirname(context.state_path)
+        plan_path = os.path.join(base, plan_path)
 
     completed = state.get("completed_tasks", [])
     tasks = _parse_plan_tasks(plan_path)
