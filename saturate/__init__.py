@@ -21,7 +21,7 @@ from saturate.executor import (
 )
 from saturate.measure import MeasureResult, measure
 from saturate.queue import Queue
-from saturate.queue_sqlite import HumanGatedViolation, SqliteQueue
+from saturate.queue_sqlite import BudgetExhausted, HumanGatedViolation, SqliteQueue
 from saturate.runner import run_turn
 
 __all__ = [
@@ -40,6 +40,7 @@ __all__ = [
     "MeasureResult",
     "Queue",
     "SqliteQueue",
+    "BudgetExhausted",
     "HumanGatedViolation",
     "Executor",
     "TurnContext",

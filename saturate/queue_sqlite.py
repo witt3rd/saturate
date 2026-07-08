@@ -20,6 +20,8 @@ tasks
     completed_at    TEXT                               -- ISO-8601, NULL while live
     terminal_reason TEXT
     human_gated     INT  NOT NULL DEFAULT 0             -- 1 if ClarificationKind
+    tokens_used     INT  NOT NULL DEFAULT 0             -- cumulative tokens across all turns
+    cost_usd        REAL NOT NULL DEFAULT 0.0           -- cumulative cost in USD
     metadata        TEXT NOT NULL DEFAULT '{}'         -- JSON blob for every other field
 
 turns
@@ -52,6 +54,15 @@ class HumanGatedViolation(Exception):
     """Raised when complete() is called on a HUMAN_GATED task without confirmed_by_human=True."""
 
 
+class BudgetExhausted(Exception):
+    """Raised by claim() when the task's budget ceiling has been reached.
+
+    The caller should treat this as a clean terminal signal -- do not retry,
+    do not escalate. The loop reached its declared spending limit.
+    """
+
+
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -72,6 +83,8 @@ _TASK_COLUMNS: frozenset[str] = frozenset(
         "completed_at",
         "terminal_reason",
         "human_gated",
+        "tokens_used",
+        "cost_usd",
     }
 )
 
@@ -185,6 +198,8 @@ class SqliteQueue:
             # Migrate existing DBs — add columns introduced after initial schema
             for stmt in [
                 "ALTER TABLE tasks ADD COLUMN human_gated INT NOT NULL DEFAULT 0",
+                "ALTER TABLE tasks ADD COLUMN tokens_used INT NOT NULL DEFAULT 0",
+                "ALTER TABLE tasks ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0.0",
             ]:
                 try:
                     conn.execute(stmt)
@@ -236,8 +251,9 @@ class SqliteQueue:
                 """INSERT INTO tasks (
                     task_id, name, kind, status,
                     spec_path, state_path, output_path,
-                    priority, submitted_at, human_gated, metadata
-                ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)""",
+                    priority, submitted_at, human_gated,
+                    tokens_used, cost_usd, metadata
+                ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     task_id,
                     task.get("name"),
@@ -248,6 +264,8 @@ class SqliteQueue:
                     int(task.get("priority", 50)),
                     task["submitted_at"],
                     int(task.get("human_gated", 0)),
+                    int(task.get("tokens_used", 0)),
+                    float(task.get("cost_usd", 0.0)),
                     json.dumps(metadata),
                 ),
             )
@@ -267,7 +285,15 @@ class SqliteQueue:
         the same task as 'pending' and double-claiming it.
 
         Returns the task dict with status='running', or None if no pending tasks.
+
+        Raises ``BudgetExhausted`` if the task has a ``budget`` spec and the
+        cumulative spend on that task has already reached the declared ceiling.
+        Queue-level enforcement is the only correct location for distributed
+        multiplier safety -- N concurrent workers cannot each independently
+        check and collectively exceed the ceiling.
         """
+        from loop_spec import load_spec as _load_spec
+
         conn = self._connect()
         try:
             conn.execute("BEGIN EXCLUSIVE")
@@ -282,6 +308,38 @@ class SqliteQueue:
             if row is None:
                 conn.execute("ROLLBACK")
                 return None
+
+            # Budget enforcement: check before granting the claim
+            spec_path = row["spec_path"]
+            if spec_path:
+                try:
+                    _spec = _load_spec(spec_path)
+                    budget = _spec.budget
+                    if budget is not None:
+                        tokens_used = row["tokens_used"] or 0
+                        cost_usd = row["cost_usd"] or 0.0
+                        if (
+                            budget.max_tokens_total is not None
+                            and tokens_used >= budget.max_tokens_total
+                        ):
+                            conn.execute("ROLLBACK")
+                            raise BudgetExhausted(
+                                f"Task {row['task_id']!r}: tokens_used={tokens_used} "
+                                f">= budget.max_tokens_total={budget.max_tokens_total}"
+                            )
+                        if (
+                            budget.max_cost_usd is not None
+                            and cost_usd >= budget.max_cost_usd
+                        ):
+                            conn.execute("ROLLBACK")
+                            raise BudgetExhausted(
+                                f"Task {row['task_id']!r}: cost_usd={cost_usd:.4f} "
+                                f">= budget.max_cost_usd={budget.max_cost_usd}"
+                            )
+                except BudgetExhausted:
+                    raise
+                except Exception:
+                    pass  # spec unreadable -- proceed without budget enforcement
 
             task_id: str = row["task_id"]
             conn.execute(
@@ -439,6 +497,24 @@ class SqliteQueue:
         except Exception:
             conn.execute("ROLLBACK")
             raise
+        finally:
+            conn.close()
+
+    def record_spend(self, task_id: str, tokens: int = 0, cost_usd: float = 0.0) -> None:
+        """Accumulate token and cost spend against a running task.
+
+        Called by the execution fabric after each turn to track cumulative budget
+        consumption.  The queue enforces budget ceilings at claim() time; callers
+        only need to report spend accurately -- enforcement is automatic.
+        """
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE tasks SET tokens_used = tokens_used + ?, "
+                "cost_usd = cost_usd + ? WHERE task_id = ?",
+                (int(tokens), float(cost_usd), task_id),
+            )
+            conn.commit()
         finally:
             conn.close()
 
