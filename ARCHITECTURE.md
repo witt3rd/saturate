@@ -350,11 +350,15 @@ the winning worktree into canonical and reaps the rest. The loop repo is
 orthogonal to the outer project's git history.
 
 **For binary / structured artifacts:**
-Per-worker staging directories. Workers write to `staging/{task_id}/`. Scheduler
-applies each proposal to a fresh copy of canonical, measures, promotes the winner.
+Per-task staging directories. In Saturate's swarm model, each child task in a
+`BatchKind` fan-out has its own unique `task_id`, so `staging/{task_id}/` is
+worker-unique by construction. Workers write their proposal to their staging
+directory; the scheduler applies each proposal to a fresh copy of canonical,
+measures, and promotes the winner atomically.
 
-**Long-term target:** BranchFS (arXiv:2602.08199) — copy-on-write OS primitives,
-sub-350µs branch creation, first-commit-wins, artifact-type-agnostic.
+**Long-term target:** BranchFS (arXiv:2602.08199) provides copy-on-write OS
+primitives with sub-350µs branch creation, first-commit-wins resolution, and
+artifact-type-agnostic isolation — the correct Saturate fleet primitive when available.
 
 **GC:** N workers × M iterations = N×M ephemeral artifacts. The Saturate scheduler
 is responsible for reaping staging directories and loop-scoped git repos after each
