@@ -336,6 +336,30 @@ identical across both topologies.
 collects the winner. `BatchKind` and `SpawnPolicy` are Phase 2 design targets —
 not yet implemented.
 
+### Swarm Isolation Strategy (decided)
+
+When N workers each propose a change to the same `target_files`, they must not
+collide. The invariant (universal across Ray Tune, Island-model GAs, CMA-ES):
+
+> **The scheduler is the single writer to canonical state. Workers are proposers only.**
+
+**For text / code / config / prompt artifacts:**
+Loop-scoped ephemeral git repo with per-worker worktrees. Each worker operates
+on its own branch — never touching canonical. Saturate's scheduler cherry-picks
+the winning worktree into canonical and reaps the rest. The loop repo is
+orthogonal to the outer project's git history.
+
+**For binary / structured artifacts:**
+Per-worker staging directories. Workers write to `staging/{task_id}/`. Scheduler
+applies each proposal to a fresh copy of canonical, measures, promotes the winner.
+
+**Long-term target:** BranchFS (arXiv:2602.08199) — copy-on-write OS primitives,
+sub-350µs branch creation, first-commit-wins, artifact-type-agnostic.
+
+**GC:** N workers × M iterations = N×M ephemeral artifacts. The Saturate scheduler
+is responsible for reaping staging directories and loop-scoped git repos after each
+generation. `output_dir` in the loop spec is the cleanup scope.
+
 ---
 
 ## Fleet Management
