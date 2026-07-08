@@ -202,4 +202,6 @@ def make_executor(executor_spec: ExecutorSpec | None) -> Executor:
         return HermesExecutor(profile=executor_spec.profile)
     if executor_spec.type == "shell":
         return ShellExecutor(command=executor_spec.command or "echo no-executor")
-    raise NotImplementedError(f"Executor type {executor_spec.type!r} not yet implemented")
+    raise NotImplementedError(
+        f"Executor type {executor_spec.type!r} not yet implemented"
+    )
