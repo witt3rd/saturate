@@ -19,6 +19,7 @@ tasks
     submitted_at    TEXT                               -- ISO-8601
     completed_at    TEXT                               -- ISO-8601, NULL while live
     terminal_reason TEXT
+    human_gated     INT  NOT NULL DEFAULT 0             -- 1 if ClarificationKind
     metadata        TEXT NOT NULL DEFAULT '{}'         -- JSON blob for every other field
 
 turns
@@ -46,6 +47,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+class HumanGatedViolation(Exception):
+    """Raised when complete() is called on a HUMAN_GATED task without confirmed_by_human=True."""
+
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -65,6 +70,7 @@ _TASK_COLUMNS: frozenset[str] = frozenset(
         "submitted_at",
         "completed_at",
         "terminal_reason",
+        "human_gated",
     }
 )
 
@@ -174,8 +180,16 @@ class SqliteQueue:
     def _init_db(self) -> None:
         conn = self._connect()
         try:
-            # executescript() issues an implicit COMMIT first, then runs DDL
             conn.executescript(_DDL)
+            # Migrate existing DBs — add columns introduced after initial schema
+            for stmt in [
+                "ALTER TABLE tasks ADD COLUMN human_gated INT NOT NULL DEFAULT 0",
+            ]:
+                try:
+                    conn.execute(stmt)
+                    conn.commit()
+                except Exception:
+                    pass  # column already exists
         finally:
             conn.close()
 
@@ -184,12 +198,29 @@ class SqliteQueue:
     # ------------------------------------------------------------------
 
     def post(self, task: dict) -> str:
-        """Assign task_id if absent, insert into tasks table, return task_id."""
+        """Assign task_id if absent, insert into tasks table, return task_id.
+
+        If ``spec_path`` is present, the spec is loaded via ``loop_spec.load_spec()``
+        and ``name``, ``kind``, and ``human_gated`` are derived from it.
+        The spec is the source of truth — it overrides any caller-supplied values
+        for those fields.
+        """
+        from loop_spec import ClarificationSpec
+        from loop_spec import load_spec as _load_spec
         task = dict(task)  # don't mutate caller's dict
         if "task_id" not in task:
             task["task_id"] = str(uuid.uuid4())
         if "submitted_at" not in task:
             task["submitted_at"] = _now_iso()
+        # Derive metadata from spec when spec_path is present
+        if "spec_path" in task:
+            try:
+                _spec = _load_spec(task["spec_path"])
+                task["name"] = _spec.name
+                task["kind"] = _spec.kind
+                task["human_gated"] = 1 if isinstance(_spec, ClarificationSpec) else 0
+            except Exception:
+                pass  # spec unreadable at post time — runner will surface it
 
         task_id: str = task["task_id"]
 
@@ -203,8 +234,8 @@ class SqliteQueue:
                 """INSERT INTO tasks (
                     task_id, name, kind, status,
                     spec_path, state_path, output_path,
-                    priority, submitted_at, metadata
-                ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)""",
+                    priority, submitted_at, human_gated, metadata
+                ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     task_id,
                     task.get("name"),
@@ -214,6 +245,7 @@ class SqliteQueue:
                     task.get("output_path"),
                     int(task.get("priority", 50)),
                     task["submitted_at"],
+                    int(task.get("human_gated", 0)),
                     json.dumps(metadata),
                 ),
             )
@@ -276,13 +308,24 @@ class SqliteQueue:
         state_dir.mkdir(parents=True, exist_ok=True)
         (state_dir / "state.json").write_text(json.dumps(state, indent=2))
 
-    def complete(self, task_id: str, output: dict) -> None:
+    def complete(self, task_id: str, output: dict, *, confirmed_by_human: bool = False) -> None:
         """Set status='done', completed_at=now, merge output into metadata.
 
-        Fields in *output* that are not protected DB columns (task_id, status,
-        submitted_at, completed_at) are merged into the metadata JSON blob.
-        The special field 'terminal_reason' is written to its own column.
+        Raises ``HumanGatedViolation`` if the task has ``human_gated=1`` and
+        ``confirmed_by_human`` is not True — enforcing that a human explicitly
+        confirmed completion before the loop closes.
         """
+        # Enforce human gate before any state change
+        with self._connect() as _c:
+            _row = _c.execute(
+                "SELECT human_gated FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            if _row and _row["human_gated"] and not confirmed_by_human:
+                raise HumanGatedViolation(
+                    f"Task {task_id!r} is HUMAN_GATED — pass confirmed_by_human=True "
+                    "only after explicit human confirmation."
+                )
+
         conn = self._connect()
         try:
             conn.execute("BEGIN")
@@ -394,6 +437,38 @@ class SqliteQueue:
             raise
         finally:
             conn.close()
+
+    def cancel(self, task_id: str, reason: str = "user request") -> None:
+        """Cancel a pending or running task. Sets status='done' with terminal_reason='cancelled: <reason>'."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE tasks SET status='done', terminal_reason=?, completed_at=? WHERE task_id=?",
+                (f"cancelled: {reason}", _now_iso(), task_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def find(self, name: str, kind: str | None = None) -> str | None:
+        """Return the task_id of the most-recently posted task matching name (and optionally kind).
+
+        Returns None if no match. Enables idempotent post patterns — check if
+        a spec is already queued before posting again.
+        """
+        with self._connect() as conn:
+            if kind:
+                row = conn.execute(
+                    "SELECT task_id FROM tasks WHERE name=? AND kind=? "
+                    "ORDER BY submitted_at DESC LIMIT 1",
+                    (name, kind),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT task_id FROM tasks WHERE name=? ORDER BY submitted_at DESC LIMIT 1",
+                    (name,),
+                ).fetchone()
+            return row["task_id"] if row else None
 
     def counts(self) -> dict:
         """Return {pending, running, done} counts."""
