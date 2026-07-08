@@ -55,7 +55,7 @@ def _write_stagnating_spec(spec_path: Path, repo: Path) -> None:
         "kind": "MetricOptimizationKind",
         "direction": "lower_is_better",
         "metric": "stagnation test",
-        "repo": str(repo),
+        "repo": f"file://{repo}",
         "terminal": {
             "plateau_count": 3,
             "max_iterations": 100,
