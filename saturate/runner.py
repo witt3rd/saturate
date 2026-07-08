@@ -82,7 +82,9 @@ def run_turn(task_id: str, queue: Queue) -> str:
 
     correct = True
     if measure_result.outcome == "improved" and spec.correctness:
-        r = subprocess.run(spec.correctness, shell=True, capture_output=True, cwd=run_cwd)
+        r = subprocess.run(
+            spec.correctness, shell=True, capture_output=True, cwd=run_cwd
+        )
         correct = r.returncode == 0
 
     kept = measure_result.outcome == "improved" and correct

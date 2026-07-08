@@ -28,7 +28,9 @@ class MeasureResult:
     raw: str
 
 
-def _run_once(command: str, extract: str, timeout: int, cwd: str | None = None) -> tuple[float, str]:
+def _run_once(
+    command: str, extract: str, timeout: int, cwd: str | None = None
+) -> tuple[float, str]:
     """
     Run command once and return (extracted_value, raw_stdout).
 
