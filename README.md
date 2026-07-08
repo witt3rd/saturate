@@ -1,110 +1,93 @@
 # Saturate
 
-## The Problem
+**Distributed loop execution fabric for agentic work.**
 
-You have machines sitting idle.
+You have machines sitting idle. Workstations sleep overnight. A DGX Spark runs
+inference for a few hours then idles at 5%. The agentic loops that could be
+running — build optimizers, research agents, test generators — need someone to
+babysit them. You start one, watch it, restart it when it stalls.
 
-Your workstations sleep overnight. Your laptops sit at low CPU between meetings.
-That DGX Spark runs inference for a few hours and then idles at 5% utilization.
-Meanwhile, the agentic loops that could be running — build optimizers, research
-agents, code synthesis, test generators — need someone to babysit them. You start
-one, watch it, restart it when it stalls. Scale stops at one loop per terminal
-window.
+Most agentic loops don't need a GPU. They coordinate, call frontier AI APIs,
+run tools, measure results. That's CPU and network. The compute sitting idle
+across your fleet is sufficient for hundreds of concurrent loops. Nobody built
+the distributed layer.
 
-The world moved to GPU and forgot about CPU. Most agentic loops don't need a GPU —
-they coordinate, call frontier AI APIs, run tools, measure results. That's CPU and
-network. The compute sitting idle across your fleet is sufficient for hundreds of
-concurrent loops. Nobody has built the distributed layer.
+**Saturate keeps your fleet running useful agentic loops continuously.**
 
-## The Solution
+---
 
-Saturate keeps your fleet running useful agentic loops continuously, without
-babysitting.
+## How it works
 
-You declare goals. Saturate schedules loops onto idle nodes, runs the
-hypothesis/measure/keep-or-revert cycle, tracks every iteration, handles
-failures and retries, and keeps the fleet saturated. Loops spawn child loops.
-The fleet self-directs toward declared objectives.
+Declare a goal as a [loop-spec](https://github.com/witt3rd/loop-spec) YAML file.
+Saturate schedules it onto available compute, drives the
+hypothesis → measure → keep/revert cycle, tracks every iteration, and handles
+failures and restarts automatically.
 
 ```
-goal declared → loop spec committed → Saturate schedules it
+goal declared → loop spec validated → Saturate schedules it
     → loop runs on idle CPU → hypothesis → measure → keep/revert
     → terminal condition hit → harvest output → spawn follow-on loops?
     → fleet picks up the next pending loop
 ```
 
-## Why use this?
-
-- **Scales what loop engineering already proves.** The hypothesis/measure/keep-or-revert
-  pattern produces real results. Saturate takes it from one machine and one terminal
-  to every idle CPU you have.
-- **CPU-first.** Most agentic loops call frontier AI APIs — they need coordination,
-  not GPUs. GPU is one scheduling tag for the minority that need local inference.
-  Your idle CPU fleet is the bottleneck nobody talks about.
-- **Any agent, any framework.** Declare your executor in the loop spec — a Hermes
-  profile, a shell script, an HTTP endpoint. Saturate launches it, monitors it,
-  and recovers from crashes. No SDK to import.
-- **Self-similar hierarchy.** Loops spawn loops. A literature survey that completes
-  spawns refinement loops on its most promising threads. The fleet self-directs.
-- **Zero idle cycles by design.** The scheduler tick continuously surveys the
-  fleet, dispatches eligible loops to idle nodes, and harvests completions. When
-  there's work to do, nothing sits idle.
-
 ---
 
-## Getting Started
+## Quick start
 
 ```bash
 pip install -e ".[dev]"
-
-# Drop a loop spec into goals/
-cat > goals/build-optimizer.yaml << 'EOF'
-name: build-optimizer
-kind: metric-optimization
-goal: Reduce CI build time by at least 20%
-metric:
-  command: npm run build
-  extract: wall_clock
-  direction: minimize
-correctness:
-  command: npm test
-executor:
-  type: shell
-  command: ./agents/optimizer.sh
-max_turns: 100
-stagnation_n: 10
-memory: ./output/build-optimizer/
-EOF
-
-# Submit and run
-saturate submit goals/build-optimizer.yaml
-saturate run --loop <task_id>
-
-# Or run the scheduler continuously (picks up goals/ automatically)
-saturate start
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full loop spec format, executor
-types, and fleet configuration.
+Write a loop spec:
+
+```yaml
+# goals/coverage-optimizer.yaml
+name: coverage-optimizer
+kind: MetricOptimizationKind
+direction: higher_is_better
+metric: test coverage
+repo: https://github.com/you/yourproject.git
+evaluate: cd examples/yourproject && python -m pytest --co -q 2>/dev/null | tail -1
+evaluate_extract: "regex:(\\d+)"
+correctness: cd examples/yourproject && python -m pytest -q
+terminal:
+  max_iterations: 50
+  plateau_count: 8
+executor:
+  type: hermes
+  profile: forge
+output_dir: ./output/coverage-optimizer/
+```
+
+Submit and run:
+
+```bash
+# Drop the spec in goals/ — scheduler picks it up automatically
+saturate start --goals-dir goals/
+
+# Or run one turn manually
+saturate run <task_id>
+```
 
 ---
 
-## Loop Kinds
+## Loop kinds
 
-Six typed loop kinds, each with its own spec schema and terminal conditions:
+Six typed loop kinds. Each has its own spec schema and terminal conditions.
+All are declared in [loop-spec](https://github.com/witt3rd/loop-spec).
 
 | Kind | What one turn does | Terminates when |
-|---|---|---|
-| `metric-optimization` | Hypothesis → apply → measure → keep/revert | Target hit, stagnation, budget |
-| `task-execution` | Execute next task from a plan file | All plan tasks complete |
-| `information-seeking` | Search until sufficiency gate passes | Sufficient evidence |
-| `clarification` | Socratic dialogue | Human calls `complete()` |
-| `consensus` | Multi-role deliberation | Agreement reached |
-| `selection` | Generate candidates, score, converge | Convergence or budget |
+|------|--------------------|-----------------| 
+| `MetricOptimizationKind` | Hypothesis → apply → measure → keep/revert | Target hit, plateau, or max_iterations |
+| `TaskExecutionKind` | Execute next task from a plan file | All plan tasks complete |
+| `InformationSeekingKind` | Search until sufficiency gate passes | Sufficient evidence |
+| `ClarificationKind` | Socratic dialogue | Human explicitly confirms (HUMAN_GATED) |
+| `ConsensusKind` | Multi-role deliberation | All roles approve |
+| `SelectionKind` | Generate candidates, score, converge | Convergence or budget |
 
 ---
 
-## Executor Types
+## Executor types
 
 Every loop spec declares how its agent is invoked:
 
@@ -114,7 +97,7 @@ executor:
   profile: forge
 
 executor:
-  type: shell        # Any executable, context via SATURATE_* env vars
+  type: shell        # Any executable; context via SATURATE_* env vars
   command: ./my-agent.sh
 
 executor:
@@ -126,27 +109,44 @@ Workers don't import a Saturate SDK. Any language, any framework.
 
 ---
 
+## The `repo` field
+
+Loops that commit and revert hypotheses declare the target git repository as a
+URL. Saturate clones it into an isolated worktree — the Saturate source tree
+is never touched.
+
+```yaml
+repo: https://github.com/you/yourproject.git
+# or: git@github.com:you/yourproject.git
+# or: file:///home/dt/src/myproject  (local, for testing)
+```
+
+Absolute local paths are rejected. The spec is machine-agnostic.
+
+---
+
 ## Architecture
 
-- **Durable queue** — embedded SQLite (single-node, zero config) → PostgreSQL
-  (fleet mode, atomic `SELECT FOR UPDATE SKIP LOCKED`)
-- **Fleet scheduler** — routes loops to idle nodes by resource requirements and
-  priority; Phase 2+ uses [Nomad](https://www.nomadproject.io) for node management
-- **`saturate.measure`** — scalar metric primitive: runs a command, returns
-  `improved / regressed / crashed / unchanged` (crashed ≠ regressed, never
-  contaminates the baseline)
-- **Networking** — [Tailscale](https://tailscale.com) mesh across heterogeneous
-  nodes (Linux, macOS, ARM, x86)
+- **Durable queue** — embedded SQLite (single-node, zero config); PostgreSQL
+  for fleet mode (`SELECT FOR UPDATE SKIP LOCKED` for concurrent workers)
+- **Spec-aware queue** — `post()` loads the loop spec and derives `name`,
+  `kind`, and `human_gated` from it; the spec is the source of truth
+- **HUMAN_GATED enforcement** — `ClarificationKind` tasks raise
+  `HumanGatedViolation` if `complete()` is called without `confirmed_by_human=True`
+- **Fleet scheduler** — routes loops to idle nodes by resource requirements
+  and priority; Phase 2 uses Nomad for node management
+- **`saturate.measure`** — scalar metric primitive: runs a command, extracts
+  a number, returns `improved / regressed / crashed / unchanged`
+  (`crashed ≠ regressed` — never contaminates the baseline)
+- **Networking** — Tailscale mesh across heterogeneous nodes
 
-→ [VISION.md](VISION.md) — the full thesis  
 → [ARCHITECTURE.md](ARCHITECTURE.md) — components, loop taxonomy, design decisions
 
 ---
 
-## Status
+## Companion projects
 
-**Phase 1 complete** — single-node loop execution, SQLite queue, scheduler tick,
-`saturate start` command, 139 tests.
-
-**Phase 2 in progress** — PostgreSQL fleet queue, Nomad node management,
-multi-node concurrent loop execution.
+- [**loop-spec**](https://github.com/witt3rd/loop-spec) — the open loop spec
+  standard. Neither Saturate nor Cyclus owns it. Changes land there first.
+- [**hermes-cyclus**](https://github.com/witt3rd/hermes-cyclus) — deliberation
+  layer that designs work and produces loop specs. Cyclus designs; Saturate executes.
