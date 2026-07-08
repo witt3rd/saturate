@@ -136,6 +136,10 @@ def measure(
     runs:      Number of times to run the command; result is the average.
                Crashes on any single run immediately return outcome='crashed'.
     timeout:   Per-run timeout in seconds.
+    cwd:       Working directory for the subprocess. Should be the isolated
+               worktree when running inside a Saturate loop, so metric commands
+               operate on the target project, not the fabric's source tree.
+               None uses the current process working directory.
 
     Returns
     -------

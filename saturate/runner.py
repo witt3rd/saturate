@@ -49,8 +49,9 @@ def run_turn(task_id: str, queue: Queue) -> str:
 
     # Clone spec.repo (git URL) into an isolated worktree once; reuse thereafter
     work_dir = _resolve_worktree(spec.repo, task_state_path)
-    # Use work_dir as cwd for all subprocess calls to avoid dirtying the
-    # Saturate source tree. Fall back to state dir when no worktree exists.
+    # cwd for metric evaluation and correctness commands — scoped to the
+    # isolated worktree when present, otherwise the task state directory.
+    # Note: repo clone and executor spawning use their own cwd handling.
     run_cwd = work_dir or task_state_path
 
     context = TurnContext(
@@ -157,8 +158,9 @@ def _run_task_execution_turn(
 ) -> str:
     plan_path = spec.plan_path or ""
     if plan_path and not os.path.isabs(plan_path):
-        # Resolve relative to work_dir (the isolated clone), not the Saturate root
-        base = work_dir or os.path.dirname(context.state_path)
+        # Resolve relative to work_dir (the isolated clone), not the Saturate root.
+        # context.state_path is itself a directory, so use it directly as fallback.
+        base = work_dir or context.state_path
         plan_path = os.path.join(base, plan_path)
 
     completed = state.get("completed_tasks", [])

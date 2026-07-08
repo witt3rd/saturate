@@ -215,10 +215,10 @@ def test_integration_queue_counts_after_terminal(tmp_path):
 def test_integration_does_not_touch_saturate_repo(tmp_path):
     """The loop's git operations must never affect the Saturate source tree.
 
-    Specifically: files outside .cyclus/ and the queue state dir must not
-    be modified by git operations (add/commit/revert) that the runner performs.
-    uv.lock and Python source files under test are excluded from this check
-    since they may be touched by the test runner itself.
+    Specifically: files outside the isolated worktree must not be modified
+    by git operations (add/commit/revert) that the runner performs.
+    Excluded from the dirty-tree check: uv.lock (package manager), .pyc
+    files and __pycache__ directories (Python bytecode from the test runner).
     """
     import os
     saturate_root = Path(__file__).parent.parent
