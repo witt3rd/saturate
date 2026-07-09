@@ -309,3 +309,27 @@ def test_hermes_execute_turn_uses_existing_hypothesis(tmp_path: pathlib.Path) ->
         result = exe.execute_turn(spec, {}, ctx)
 
     assert pathlib.Path(result.hypothesis_path).read_text() == "agent-written hypothesis content"
+
+
+def test_hermes_execute_turn_env_contains_saturate_task(tmp_path: pathlib.Path) -> None:
+    """execute_turn must pass SATURATE_TASK (from os.environ) into the subprocess env."""
+    import os as _os
+    ctx = _make_context(tmp_path)
+    spec = {"goal": "env check goal", "kind": "metric-optimization"}
+
+    captured_kwargs: dict = {}
+
+    def _fake_run(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return MagicMock(stdout="", stderr=None, returncode=0)
+
+    with patch.dict(_os.environ, {"SATURATE_TASK": "test-task-id-123"}):
+        with patch("subprocess.run", side_effect=_fake_run):
+            exe = HermesExecutor(profile="test-profile")
+            exe.execute_turn(spec, {}, ctx)
+
+    env_passed = captured_kwargs.get("env", {})
+    assert "SATURATE_TASK" in env_passed, (
+        f"SATURATE_TASK not found in subprocess env; keys={list(env_passed.keys())}"
+    )
+    assert env_passed["SATURATE_TASK"] == "test-task-id-123"

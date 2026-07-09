@@ -13,6 +13,7 @@ Phase 1: single-node, spawns `python -m saturate.runner_proc <task_id> <db_path>
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -273,12 +274,23 @@ def _score_task(task: dict, now: datetime) -> float:
 
 
 def _launch_runner(task_id: str, db_path: str) -> subprocess.Popen:
-    """Spawn a subprocess running saturate.runner_proc."""
+    """Spawn a subprocess running saturate.runner_proc.
+
+    SATURATE_TASK and SATURATE_QUEUE_DIR are injected into the subprocess
+    environment so that any code the runner invokes (including cyclus_queue
+    backends) can detect the Saturate backend without parsing CLI args.
+    """
+    env = {
+        **os.environ,
+        "SATURATE_TASK": task_id,
+        "SATURATE_QUEUE_DIR": str(Path(db_path).parent),
+    }
     return subprocess.Popen(
         [sys.executable, "-m", "saturate.runner_proc", task_id, db_path],
         # Inherit stdout/stderr so logs surface in the parent terminal
         stdout=None,
         stderr=None,
+        env=env,
     )
 
 

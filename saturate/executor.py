@@ -70,6 +70,15 @@ class HermesExecutor:
             stdout=subprocess.PIPE,
             stderr=None,
             text=True,
+            # Explicit env pass-through so SATURATE_TASK and SATURATE_QUEUE_DIR
+            # injected by the scheduler survive into the hermes worker subprocess.
+            env={
+                **os.environ,
+                # Re-state the key vars explicitly so any downstream code that
+                # checks for them by name can rely on their presence.
+                "SATURATE_TASK": os.environ.get("SATURATE_TASK", ""),
+                "SATURATE_QUEUE_DIR": os.environ.get("SATURATE_QUEUE_DIR", ""),
+            },
         )
 
         hyp_path = os.path.join(context.state_path, "hypothesis.md")
