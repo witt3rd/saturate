@@ -283,6 +283,7 @@ def _launch_runner(task_id: str, db_path: str) -> subprocess.Popen:
     env = {
         **os.environ,
         "SATURATE_TASK": task_id,
+        "SATURATE_TASK_ID": task_id,  # canonical var for cyclus_queue backend detection
         "SATURATE_QUEUE_DIR": str(Path(db_path).parent),
     }
     return subprocess.Popen(

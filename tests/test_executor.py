@@ -312,7 +312,7 @@ def test_hermes_execute_turn_uses_existing_hypothesis(tmp_path: pathlib.Path) ->
 
 
 def test_hermes_execute_turn_env_contains_saturate_task(tmp_path: pathlib.Path) -> None:
-    """execute_turn must pass SATURATE_TASK (from os.environ) into the subprocess env."""
+    """execute_turn must pass SATURATE_TASK_ID (and SATURATE_TASK) into the subprocess env."""
     import os as _os
     ctx = _make_context(tmp_path)
     spec = {"goal": "env check goal", "kind": "metric-optimization"}
@@ -321,7 +321,11 @@ def test_hermes_execute_turn_env_contains_saturate_task(tmp_path: pathlib.Path) 
 
     def _fake_run(*args, **kwargs):
         captured_kwargs.update(kwargs)
-        return MagicMock(stdout="", stderr=None, returncode=0)
+        mock = MagicMock()
+        mock.stdout = "stub hermes output"
+        mock.stderr = None
+        mock.returncode = 0
+        return mock
 
     with patch.dict(_os.environ, {"SATURATE_TASK": "test-task-id-123"}):
         with patch("subprocess.run", side_effect=_fake_run):
@@ -329,7 +333,11 @@ def test_hermes_execute_turn_env_contains_saturate_task(tmp_path: pathlib.Path) 
             exe.execute_turn(spec, {}, ctx)
 
     env_passed = captured_kwargs.get("env", {})
-    assert "SATURATE_TASK" in env_passed, (
-        f"SATURATE_TASK not found in subprocess env; keys={list(env_passed.keys())}"
+    # SATURATE_TASK_ID is the canonical backend-detection var for cyclus_queue
+    assert "SATURATE_TASK_ID" in env_passed, (
+        f"SATURATE_TASK_ID not found in subprocess env; keys={list(env_passed.keys())}"
     )
+    assert env_passed["SATURATE_TASK_ID"] == "test-task-id-123"
+    # SATURATE_TASK is also preserved for backward compatibility
+    assert "SATURATE_TASK" in env_passed
     assert env_passed["SATURATE_TASK"] == "test-task-id-123"
