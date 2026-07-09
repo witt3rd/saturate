@@ -39,7 +39,7 @@ class TurnContext:
     stagnation_n: int  # consecutive non-improved turns
     state_path: str  # executor writes hypothesis.md here
     output_path: str
-    task_id: Optional[str] = None   # Saturate task ID — injected into subprocess env
+    task_id: Optional[str] = None  # Saturate task ID — injected into subprocess env
     queue_dir: Optional[str] = None  # Saturate queue dir — injected into subprocess env
 
 
@@ -96,14 +96,15 @@ class HermesExecutor:
             # the cyclus_queue inside the hermes subprocess routes to Saturate
             # rather than being captured by the outer Kanban context.
             env={
-                k: v for k, v in os.environ.items()
+                k: v
+                for k, v in os.environ.items()
                 if k != "HERMES_KANBAN_TASK"  # Clear outer Kanban identity
-            } | {
+            }
+            | {
                 k: v
                 for k, v in {
                     "SATURATE_TASK": (
-                        context.task_id
-                        or os.environ.get("SATURATE_TASK")
+                        context.task_id or os.environ.get("SATURATE_TASK")
                     ),
                     "SATURATE_TASK_ID": (
                         context.task_id
@@ -111,8 +112,7 @@ class HermesExecutor:
                         or os.environ.get("SATURATE_TASK")
                     ),
                     "SATURATE_QUEUE_DIR": (
-                        context.queue_dir
-                        or os.environ.get("SATURATE_QUEUE_DIR")
+                        context.queue_dir or os.environ.get("SATURATE_QUEUE_DIR")
                     ),
                 }.items()
                 if v
