@@ -91,27 +91,31 @@ class HermesExecutor:
             # the Saturate context via cyclus_queue._active_backend().
             # Priority: context fields (set by run_turn) > os.environ (set by
             # _launch_runner).  Never pass empty strings.
+            # IMPORTANT: Clear HERMES_KANBAN_TASK so that if HermesExecutor is
+            # called from within a Kanban worker (e.g. a live-e2e test task),
+            # the cyclus_queue inside the hermes subprocess routes to Saturate
+            # rather than being captured by the outer Kanban context.
             env={
-                **os.environ,
-                **{
-                    k: v
-                    for k, v in {
-                        "SATURATE_TASK": (
-                            context.task_id
-                            or os.environ.get("SATURATE_TASK")
-                        ),
-                        "SATURATE_TASK_ID": (
-                            context.task_id
-                            or os.environ.get("SATURATE_TASK_ID")
-                            or os.environ.get("SATURATE_TASK")
-                        ),
-                        "SATURATE_QUEUE_DIR": (
-                            context.queue_dir
-                            or os.environ.get("SATURATE_QUEUE_DIR")
-                        ),
-                    }.items()
-                    if v
-                },
+                k: v for k, v in os.environ.items()
+                if k != "HERMES_KANBAN_TASK"  # Clear outer Kanban identity
+            } | {
+                k: v
+                for k, v in {
+                    "SATURATE_TASK": (
+                        context.task_id
+                        or os.environ.get("SATURATE_TASK")
+                    ),
+                    "SATURATE_TASK_ID": (
+                        context.task_id
+                        or os.environ.get("SATURATE_TASK_ID")
+                        or os.environ.get("SATURATE_TASK")
+                    ),
+                    "SATURATE_QUEUE_DIR": (
+                        context.queue_dir
+                        or os.environ.get("SATURATE_QUEUE_DIR")
+                    ),
+                }.items()
+                if v
             },
         )
 
