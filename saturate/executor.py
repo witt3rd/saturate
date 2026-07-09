@@ -79,11 +79,11 @@ class HermesExecutor:
             )
             pathlib.Path(hyp_path).write_text(output)
 
-        notes = (
-            pathlib.Path(hyp_path).read_text()[:500]
-            if os.path.exists(hyp_path)
-            else None
-        )
+        if os.path.exists(hyp_path):
+            with open(hyp_path) as _f:
+                notes: str | None = _f.read(500)
+        else:
+            notes = None
         return ExecutorResult(
             hypothesis_path=hyp_path,
             turn_result=LoopSpecTurnResult(outcome="applied", notes=notes),
@@ -204,11 +204,11 @@ class ShellExecutor:
         if not os.path.exists(hyp_path):
             pathlib.Path(hyp_path).write_text("(executor produced no hypothesis.md)")
 
-        notes = (
-            pathlib.Path(hyp_path).read_text()[:500]
-            if os.path.exists(hyp_path)
-            else None
-        )
+        if os.path.exists(hyp_path):
+            with open(hyp_path) as _f:
+                notes: str | None = _f.read(500)
+        else:
+            notes = None
         return ExecutorResult(
             hypothesis_path=hyp_path,
             turn_result=LoopSpecTurnResult(outcome="applied", notes=notes),

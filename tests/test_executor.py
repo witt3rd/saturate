@@ -62,10 +62,9 @@ def test_turn_context_fields() -> None:
 def test_turn_result_fields() -> None:
     # ExecutorResult is Saturate's internal result carrying the hypothesis path
     # and the loop-spec TurnResult (published outcome contract)
-    from loop_spec import TurnResult as LSTurnResult
     tr = ExecutorResult(
         hypothesis_path="/tmp/hypothesis.md",
-        turn_result=LSTurnResult(outcome="applied"),
+        turn_result=TurnResult(outcome="applied"),
     )
     assert tr.hypothesis_path == "/tmp/hypothesis.md"
     assert tr.turn_result.outcome == "applied"

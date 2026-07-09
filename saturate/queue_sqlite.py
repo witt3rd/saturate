@@ -104,14 +104,16 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 
 CREATE TABLE IF NOT EXISTS turns (
-    task_id         TEXT    NOT NULL,
-    turn_n          INT     NOT NULL,
-    outcome         TEXT,
-    value           REAL,
-    correct         INT,
-    hypothesis_path TEXT,
-    raw             TEXT,
-    recorded_at     TEXT
+    task_id          TEXT    NOT NULL,
+    turn_n           INT     NOT NULL,
+    outcome          TEXT,
+    value            REAL,
+    correct          INT,
+    hypothesis_path  TEXT,
+    raw              TEXT,
+    executor_outcome TEXT,
+    executor_notes   TEXT,
+    recorded_at      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status
@@ -199,6 +201,8 @@ class SqliteQueue:
                 "ALTER TABLE tasks ADD COLUMN human_gated INT NOT NULL DEFAULT 0",
                 "ALTER TABLE tasks ADD COLUMN tokens_used INT NOT NULL DEFAULT 0",
                 "ALTER TABLE tasks ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0.0",
+                "ALTER TABLE turns ADD COLUMN executor_outcome TEXT",
+                "ALTER TABLE turns ADD COLUMN executor_notes TEXT",
             ]:
                 try:
                     conn.execute(stmt)
@@ -463,8 +467,9 @@ class SqliteQueue:
             conn.execute(
                 """INSERT INTO turns
                     (task_id, turn_n, outcome, value, correct,
-                     hypothesis_path, raw, recorded_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                     hypothesis_path, raw, executor_outcome, executor_notes,
+                     recorded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     task_id,
                     turn_n,
@@ -473,6 +478,8 @@ class SqliteQueue:
                     correct_int,
                     record.get("hypothesis_path"),
                     record.get("raw"),
+                    record.get("executor_outcome"),
+                    record.get("executor_notes"),
                     _now_iso(),
                 ),
             )
