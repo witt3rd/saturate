@@ -8,12 +8,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from loop_spec import TurnResult
 from saturate.executor import (
     Executor,
+    ExecutorResult,
     HermesExecutor,
     ShellExecutor,
     TurnContext,
-    TurnResult,
     TurnSummary,
     make_executor,
 )
@@ -59,8 +60,15 @@ def test_turn_context_fields() -> None:
 
 
 def test_turn_result_fields() -> None:
-    tr = TurnResult(hypothesis_path="/tmp/hypothesis.md")
+    # ExecutorResult is Saturate's internal result carrying the hypothesis path
+    # and the loop-spec TurnResult (published outcome contract)
+    from loop_spec import TurnResult as LSTurnResult
+    tr = ExecutorResult(
+        hypothesis_path="/tmp/hypothesis.md",
+        turn_result=LSTurnResult(outcome="applied"),
+    )
     assert tr.hypothesis_path == "/tmp/hypothesis.md"
+    assert tr.turn_result.outcome == "applied"
 
 
 def test_turn_summary_fields() -> None:

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Protocol, runtime_checkable
 
 from loop_spec import ExecutorSpec, LoopSpec, TaskExecutionSpec
+from loop_spec import TurnResult as LoopSpecTurnResult
 
 
 @dataclass
@@ -26,8 +27,15 @@ class TurnContext:
 
 
 @dataclass
-class TurnResult:
+class ExecutorResult:
+    """Internal result from a Saturate executor turn.
+
+    Carries the hypothesis.md path (implementation detail) alongside
+    the loop-spec TurnResult (the published outcome contract).
+    """
+
     hypothesis_path: str  # path to the hypothesis.md the executor wrote
+    turn_result: LoopSpecTurnResult  # published outcome for audit trail
 
 
 @runtime_checkable
@@ -37,7 +45,7 @@ class Executor(Protocol):
         spec: Any,  # LoopSpec or dict envelope (task-execution)
         state: dict,
         context: TurnContext,
-    ) -> TurnResult: ...
+    ) -> ExecutorResult: ...
 
 
 class HermesExecutor:
@@ -46,7 +54,9 @@ class HermesExecutor:
     def __init__(self, profile: str) -> None:
         self.profile = profile
 
-    def execute_turn(self, spec: Any, state: dict, context: TurnContext) -> TurnResult:
+    def execute_turn(
+        self, spec: Any, state: dict, context: TurnContext
+    ) -> ExecutorResult:
         import pathlib
 
         os.makedirs(context.state_path, exist_ok=True)
@@ -69,7 +79,15 @@ class HermesExecutor:
             )
             pathlib.Path(hyp_path).write_text(output)
 
-        return TurnResult(hypothesis_path=hyp_path)
+        notes = (
+            pathlib.Path(hyp_path).read_text()[:500]
+            if os.path.exists(hyp_path)
+            else None
+        )
+        return ExecutorResult(
+            hypothesis_path=hyp_path,
+            turn_result=LoopSpecTurnResult(outcome="applied", notes=notes),
+        )
 
     def _build_message(self, spec: Any, context: TurnContext) -> str:
         if isinstance(spec, LoopSpec):
@@ -155,7 +173,9 @@ class ShellExecutor:
     def __init__(self, command: str) -> None:
         self.command = command
 
-    def execute_turn(self, spec: Any, state: dict, context: TurnContext) -> TurnResult:
+    def execute_turn(
+        self, spec: Any, state: dict, context: TurnContext
+    ) -> ExecutorResult:
         import pathlib
 
         os.makedirs(context.state_path, exist_ok=True)
@@ -184,7 +204,15 @@ class ShellExecutor:
         if not os.path.exists(hyp_path):
             pathlib.Path(hyp_path).write_text("(executor produced no hypothesis.md)")
 
-        return TurnResult(hypothesis_path=hyp_path)
+        notes = (
+            pathlib.Path(hyp_path).read_text()[:500]
+            if os.path.exists(hyp_path)
+            else None
+        )
+        return ExecutorResult(
+            hypothesis_path=hyp_path,
+            turn_result=LoopSpecTurnResult(outcome="applied", notes=notes),
+        )
 
 
 def make_executor(executor_spec: ExecutorSpec | None) -> Executor:
