@@ -128,6 +128,8 @@ def run_turn(task_id: str, queue: Queue) -> str:
             "correct": correct,
             "hypothesis_path": result.hypothesis_path,
             "raw": measure_result.raw,
+            "executor_outcome": result.turn_result.outcome,
+            "executor_notes": result.turn_result.notes,
         },
     )
 

@@ -7,15 +7,16 @@ from loop_spec import (
     SelectionSpec,
     TaskExecutionSpec,
     TerminalConditions,
+    TurnResult,
     load_spec,
 )
 
 from saturate.executor import (
     Executor,
+    ExecutorResult,
     HermesExecutor,
     ShellExecutor,
     TurnContext,
-    TurnResult,
     TurnSummary,
     make_executor,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "Executor",
     "TurnContext",
     "TurnResult",
+    "ExecutorResult",
     "TurnSummary",
     "HermesExecutor",
     "ShellExecutor",
