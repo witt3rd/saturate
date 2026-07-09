@@ -15,6 +15,7 @@ real goal is confirming that:
 All tests use an isolated git repo — the Saturate source tree is never
 touched.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -34,13 +35,25 @@ from saturate.runner import run_turn
 # Helpers
 # ---------------------------------------------------------------------------
 
-CYCLUS_ROOT = pathlib.Path("/home/dt/src/witt3rd/cyclus")
+CYCLUS_ROOT = pathlib.Path(
+    __import__("os").environ.get("CYCLUS_ROOT", "/home/dt/src/witt3rd/cyclus")
+)
 
 EXAMPLES = {
-    "function_minimization": CYCLUS_ROOT / "examples" / "function_minimization" / "spec.yaml",
+    "function_minimization": CYCLUS_ROOT
+    / "examples"
+    / "function_minimization"
+    / "spec.yaml",
     "circle_packing": CYCLUS_ROOT / "examples" / "circle_packing" / "spec.yaml",
     "test_coverage": CYCLUS_ROOT / "examples" / "test_coverage" / "spec.yaml",
 }
+
+# Skip all tests in this module when the cyclus repo is not available.
+# These are integration tests that require a sibling checkout of hermes-cyclus.
+pytestmark = pytest.mark.skipif(
+    not CYCLUS_ROOT.exists(),
+    reason=f"hermes-cyclus repo not found at {CYCLUS_ROOT} (set CYCLUS_ROOT env var)",
+)
 
 
 def _make_queue(tmp_path: Path) -> SqliteQueue:
@@ -52,15 +65,21 @@ def _make_isolated_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "target_repo"
     repo.mkdir()
     subprocess.run(["git", "init"], cwd=repo, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=repo, capture_output=True
+    )
     (repo / "placeholder.py").write_text("# placeholder\n")
     subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
     return repo
 
 
-def _post_example_task(q: SqliteQueue, example_name: str, spec_path: Path, repo: Path) -> str:
+def _post_example_task(
+    q: SqliteQueue, example_name: str, spec_path: Path, repo: Path
+) -> str:
     """Post an example spec task, pointing repo= at an isolated repo."""
     spec = yaml.safe_load(spec_path.read_text()) or {}
     # Override repo to point at the isolated git repo so git ops don't touch cyclus
@@ -76,6 +95,7 @@ def _post_example_task(q: SqliteQueue, example_name: str, spec_path: Path, repo:
 def _mock_hermes_executor(hypothesis_text: str = "SUCCESS: stub hypothesis"):
     """Context manager that patches subprocess.run inside HermesExecutor
     and pre-writes a hypothesis.md via side_effect."""
+
     def _fake_run(*args, **kwargs):
         # Write hypothesis.md into state_path if we can determine it
         # (the env var SATURATE_STATE_PATH or context.state_path is not
@@ -88,6 +108,7 @@ def _mock_hermes_executor(hypothesis_text: str = "SUCCESS: stub hypothesis"):
 # ---------------------------------------------------------------------------
 # Task 4 — function_minimization one-turn validation
 # ---------------------------------------------------------------------------
+
 
 def test_function_minimization_spec_has_executor_block() -> None:
     """function_minimization/spec.yaml must have an executor block with type=hermes."""
@@ -138,15 +159,19 @@ def test_function_minimization_one_turn(tmp_path: pytest.TempPathFactory) -> Non
         def _side_effect(*args, **kwargs):
             call_count["n"] += 1
             cmd = args[0] if args else kwargs.get("args", [])
-            cmd_str = " ".join(str(c) for c in cmd) if isinstance(cmd, list) else str(cmd)
+            cmd_str = (
+                " ".join(str(c) for c in cmd) if isinstance(cmd, list) else str(cmd)
+            )
             if "hermes" in cmd_str:
                 return MagicMock(stdout="stub hermes output", stderr=None, returncode=0)
             # evaluate / correctness / git commands
             if any(x in cmd_str for x in ["python3", "uv run pytest", "pip install"]):
                 import json as _json
+
                 return MagicMock(
                     stdout=_json.dumps({"combined_score": 1.5}),
-                    stderr=None, returncode=0,
+                    stderr=None,
+                    returncode=0,
                 )
             # git operations
             return MagicMock(stdout="", stderr=None, returncode=0)
@@ -168,6 +193,7 @@ def test_function_minimization_one_turn(tmp_path: pytest.TempPathFactory) -> Non
 # ---------------------------------------------------------------------------
 # Task 5 — circle_packing and test_coverage one-turn validation
 # ---------------------------------------------------------------------------
+
 
 def test_circle_packing_spec_has_executor_block() -> None:
     """circle_packing/spec.yaml must have an executor block with type=hermes."""
@@ -226,16 +252,21 @@ def test_circle_packing_one_turn(tmp_path: pytest.TempPathFactory) -> None:
     task_id = _post_example_task(q, "circle_packing", spec_path, repo)
 
     with patch("subprocess.run") as mock_run:
+
         def _side_effect(*args, **kwargs):
             cmd = args[0] if args else kwargs.get("args", [])
-            cmd_str = " ".join(str(c) for c in cmd) if isinstance(cmd, list) else str(cmd)
+            cmd_str = (
+                " ".join(str(c) for c in cmd) if isinstance(cmd, list) else str(cmd)
+            )
             if "hermes" in cmd_str:
                 return MagicMock(stdout="stub circle output", stderr=None, returncode=0)
             if any(x in cmd_str for x in ["python3", "pip install", "uv run"]):
                 import json as _json
+
                 return MagicMock(
                     stdout=_json.dumps({"combined_score": 0.5}),
-                    stderr=None, returncode=0,
+                    stderr=None,
+                    returncode=0,
                 )
             return MagicMock(stdout="", stderr=None, returncode=0)
 
@@ -256,16 +287,23 @@ def test_test_coverage_one_turn(tmp_path: pytest.TempPathFactory) -> None:
     task_id = _post_example_task(q, "test_coverage", spec_path, repo)
 
     with patch("subprocess.run") as mock_run:
+
         def _side_effect(*args, **kwargs):
             cmd = args[0] if args else kwargs.get("args", [])
-            cmd_str = " ".join(str(c) for c in cmd) if isinstance(cmd, list) else str(cmd)
+            cmd_str = (
+                " ".join(str(c) for c in cmd) if isinstance(cmd, list) else str(cmd)
+            )
             if "hermes" in cmd_str:
-                return MagicMock(stdout="stub coverage output", stderr=None, returncode=0)
+                return MagicMock(
+                    stdout="stub coverage output", stderr=None, returncode=0
+                )
             if any(x in cmd_str for x in ["pytest", "python3", "uv run", "pip"]):
                 import json as _json
+
                 return MagicMock(
                     stdout=_json.dumps({"coverage_percent": 85.0}),
-                    stderr=None, returncode=0,
+                    stderr=None,
+                    returncode=0,
                 )
             return MagicMock(stdout="", stderr=None, returncode=0)
 
