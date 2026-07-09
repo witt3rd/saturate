@@ -61,6 +61,11 @@ def run_turn(task_id: str, queue: Queue) -> str:
         stagnation_n=state.get("stagnation_n", 0),
         state_path=task_state_path,
         output_path=spec.output_dir,
+        # Provide task identity so HermesExecutor can inject SATURATE_TASK_ID
+        # and SATURATE_QUEUE_DIR even when run_turn() is called directly
+        # (i.e. not via _launch_runner() which sets them in os.environ).
+        task_id=task_id,
+        queue_dir=str(state_dir),
     )
 
     if isinstance(spec, (ClarificationSpec, TaskExecutionSpec)):

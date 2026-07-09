@@ -39,6 +39,8 @@ class TurnContext:
     stagnation_n: int  # consecutive non-improved turns
     state_path: str  # executor writes hypothesis.md here
     output_path: str
+    task_id: Optional[str] = None   # Saturate task ID — injected into subprocess env
+    queue_dir: Optional[str] = None  # Saturate queue dir — injected into subprocess env
 
 
 @dataclass
@@ -85,20 +87,28 @@ class HermesExecutor:
             stdout=subprocess.PIPE,
             stderr=None,
             text=True,
-            # Pass through SATURATE_* vars so the hermes worker subprocess
-            # can detect the Saturate context via cyclus_queue._active_backend().
-            # Only inject vars that are actually set — never pass empty strings.
+            # Inject SATURATE_* vars so the hermes worker subprocess can detect
+            # the Saturate context via cyclus_queue._active_backend().
+            # Priority: context fields (set by run_turn) > os.environ (set by
+            # _launch_runner).  Never pass empty strings.
             env={
                 **os.environ,
                 **{
                     k: v
                     for k, v in {
-                        "SATURATE_TASK": os.environ.get("SATURATE_TASK"),
-                        "SATURATE_TASK_ID": (
-                            os.environ.get("SATURATE_TASK_ID")
+                        "SATURATE_TASK": (
+                            context.task_id
                             or os.environ.get("SATURATE_TASK")
                         ),
-                        "SATURATE_QUEUE_DIR": os.environ.get("SATURATE_QUEUE_DIR"),
+                        "SATURATE_TASK_ID": (
+                            context.task_id
+                            or os.environ.get("SATURATE_TASK_ID")
+                            or os.environ.get("SATURATE_TASK")
+                        ),
+                        "SATURATE_QUEUE_DIR": (
+                            context.queue_dir
+                            or os.environ.get("SATURATE_QUEUE_DIR")
+                        ),
                     }.items()
                     if v
                 },
