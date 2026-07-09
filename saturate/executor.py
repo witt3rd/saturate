@@ -70,6 +70,24 @@ class HermesExecutor:
             stdout=subprocess.PIPE,
             stderr=None,
             text=True,
+            # Pass through SATURATE_* vars so the hermes worker subprocess
+            # can detect the Saturate context via cyclus_queue._active_backend().
+            # Only inject vars that are actually set — never pass empty strings.
+            env={
+                **os.environ,
+                **{
+                    k: v
+                    for k, v in {
+                        "SATURATE_TASK": os.environ.get("SATURATE_TASK"),
+                        "SATURATE_TASK_ID": (
+                            os.environ.get("SATURATE_TASK_ID")
+                            or os.environ.get("SATURATE_TASK")
+                        ),
+                        "SATURATE_QUEUE_DIR": os.environ.get("SATURATE_QUEUE_DIR"),
+                    }.items()
+                    if v
+                },
+            },
         )
 
         hyp_path = os.path.join(context.state_path, "hypothesis.md")
