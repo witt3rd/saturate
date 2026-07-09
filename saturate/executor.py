@@ -80,7 +80,8 @@ class HermesExecutor:
                 # for backend detection; SATURATE_TASK is kept for compatibility
                 # with the scheduler's existing injection.
                 "SATURATE_TASK": os.environ.get("SATURATE_TASK", ""),
-                "SATURATE_TASK_ID": os.environ.get("SATURATE_TASK_ID") or os.environ.get("SATURATE_TASK", ""),
+                "SATURATE_TASK_ID": os.environ.get("SATURATE_TASK_ID")
+                or os.environ.get("SATURATE_TASK", ""),
                 "SATURATE_QUEUE_DIR": os.environ.get("SATURATE_QUEUE_DIR", ""),
             },
         )
