@@ -70,19 +70,23 @@ class HermesExecutor:
             stdout=subprocess.PIPE,
             stderr=None,
             text=True,
-            # Explicit env pass-through so SATURATE_TASK and SATURATE_QUEUE_DIR
-            # injected by the scheduler survive into the hermes worker subprocess.
+            # Pass through SATURATE_* vars so the hermes worker subprocess
+            # can detect the Saturate context via cyclus_queue._active_backend().
+            # Only inject vars that are actually set — never pass empty strings.
             env={
                 **os.environ,
-                # Re-state the key vars explicitly so any downstream code that
-                # checks for them by name can rely on their presence.
-                # SATURATE_TASK_ID is the canonical var that cyclus_queue uses
-                # for backend detection; SATURATE_TASK is kept for compatibility
-                # with the scheduler's existing injection.
-                "SATURATE_TASK": os.environ.get("SATURATE_TASK", ""),
-                "SATURATE_TASK_ID": os.environ.get("SATURATE_TASK_ID")
-                or os.environ.get("SATURATE_TASK", ""),
-                "SATURATE_QUEUE_DIR": os.environ.get("SATURATE_QUEUE_DIR", ""),
+                **{
+                    k: v
+                    for k, v in {
+                        "SATURATE_TASK": os.environ.get("SATURATE_TASK"),
+                        "SATURATE_TASK_ID": (
+                            os.environ.get("SATURATE_TASK_ID")
+                            or os.environ.get("SATURATE_TASK")
+                        ),
+                        "SATURATE_QUEUE_DIR": os.environ.get("SATURATE_QUEUE_DIR"),
+                    }.items()
+                    if v
+                },
             },
         )
 

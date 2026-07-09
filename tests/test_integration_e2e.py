@@ -14,10 +14,15 @@ real goal is confirming that:
 
 All tests use an isolated git repo — the Saturate source tree is never
 touched.
+
+These tests require a sibling checkout of hermes-cyclus.  When the repo
+is not present (e.g. in CI without the sibling), the whole module is
+skipped via ``pytestmark``.
 """
 
 from __future__ import annotations
 
+import json as _json
 import pathlib
 import subprocess
 from pathlib import Path
@@ -30,9 +35,8 @@ from saturate.executor import HermesExecutor, make_executor
 from saturate.queue_sqlite import SqliteQueue
 from saturate.runner import run_turn
 
-
 # ---------------------------------------------------------------------------
-# Helpers
+# Paths
 # ---------------------------------------------------------------------------
 
 CYCLUS_ROOT = pathlib.Path(
@@ -49,11 +53,15 @@ EXAMPLES = {
 }
 
 # Skip all tests in this module when the cyclus repo is not available.
-# These are integration tests that require a sibling checkout of hermes-cyclus.
 pytestmark = pytest.mark.skipif(
     not CYCLUS_ROOT.exists(),
     reason=f"hermes-cyclus repo not found at {CYCLUS_ROOT} (set CYCLUS_ROOT env var)",
 )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _make_queue(tmp_path: Path) -> SqliteQueue:
@@ -64,16 +72,24 @@ def _make_isolated_repo(tmp_path: Path) -> Path:
     """Create a minimal git repo for the loop to operate against."""
     repo = tmp_path / "target_repo"
     repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
     subprocess.run(
-        ["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
     )
     subprocess.run(
-        ["git", "config", "user.name", "Test"], cwd=repo, capture_output=True
+        ["git", "config", "user.name", "Test"],
+        cwd=repo,
+        capture_output=True,
+        check=True,
     )
     (repo / "placeholder.py").write_text("# placeholder\n")
-    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=True
+    )
     return repo
 
 
@@ -82,7 +98,6 @@ def _post_example_task(
 ) -> str:
     """Post an example spec task, pointing repo= at an isolated repo."""
     spec = yaml.safe_load(spec_path.read_text()) or {}
-    # Override repo to point at the isolated git repo so git ops don't touch cyclus
     task = {
         "name": spec.get("name", example_name),
         "kind": spec.get("kind", "MetricOptimizationKind"),
@@ -92,17 +107,32 @@ def _post_example_task(
     return q.post(task)
 
 
-def _mock_hermes_executor(hypothesis_text: str = "SUCCESS: stub hypothesis"):
-    """Context manager that patches subprocess.run inside HermesExecutor
-    and pre-writes a hypothesis.md via side_effect."""
+def _metric_side_effect(metric_key: str, metric_value: float):
+    """Return a subprocess.run side_effect that:
+    - For hermes CLI calls (list-based, shell=False): returns stub stdout
+    - For shell=True calls (evaluate/correctness): returns JSON with metric_key
+    - For all other calls (git, etc.): returns empty stdout
+    This is keyed on shell=True rather than substring matching, so it stays
+    stable even if the exact evaluate/correctness command strings change.
+    """
 
-    def _fake_run(*args, **kwargs):
-        # Write hypothesis.md into state_path if we can determine it
-        # (the env var SATURATE_STATE_PATH or context.state_path is not
-        # accessible here, so we write it by inspecting the cmd)
-        return MagicMock(stdout=hypothesis_text, stderr=None, returncode=0)
+    def _side_effect(*args, **kwargs):
+        shell = kwargs.get("shell", False)
+        cmd = args[0] if args else kwargs.get("args", [])
+        # Hermes executor: list command, no shell
+        if isinstance(cmd, list) and cmd and cmd[0] == "hermes":
+            return MagicMock(stdout="stub hermes output", stderr=None, returncode=0)
+        # evaluate / correctness: shell=True
+        if shell:
+            return MagicMock(
+                stdout=_json.dumps({metric_key: metric_value}),
+                stderr=None,
+                returncode=0,
+            )
+        # git and other list commands
+        return MagicMock(stdout="", stderr=None, returncode=0)
 
-    return patch("subprocess.run", side_effect=_fake_run)
+    return _side_effect
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +153,7 @@ def test_function_minimization_spec_has_executor_block() -> None:
 
 def test_function_minimization_spec_loads_cleanly() -> None:
     """loop_spec.load_spec() must parse function_minimization spec without error."""
-    from loop_spec import load_spec, MetricOptimizationSpec
+    from loop_spec import MetricOptimizationSpec, load_spec
 
     spec_path = EXAMPLES["function_minimization"]
     spec = load_spec(str(spec_path))
@@ -137,12 +167,8 @@ def test_function_minimization_spec_loads_cleanly() -> None:
     )
 
 
-def test_function_minimization_one_turn(tmp_path: pytest.TempPathFactory) -> None:
-    """function_minimization: post task → run_turn → turn recorded without crash.
-
-    The Hermes executor is mocked so the test runs offline.  The measure
-    command is also mocked to return a fixed metric value.
-    """
+def test_function_minimization_one_turn(tmp_path: Path) -> None:
+    """function_minimization: post task → run_turn → turn recorded without crash."""
     repo = _make_isolated_repo(tmp_path)
     q = _make_queue(tmp_path)
     spec_path = EXAMPLES["function_minimization"]
@@ -150,42 +176,14 @@ def test_function_minimization_one_turn(tmp_path: pytest.TempPathFactory) -> Non
     task_id = _post_example_task(q, "function_minimization", spec_path, repo)
     assert q.counts()["pending"] == 1
 
-    # Mock subprocess.run so the hermes CLI and the evaluate command don't run
-    with patch("subprocess.run") as mock_run:
-        # First call: HermesExecutor → returns stdout (no hypothesis.md written)
-        # Subsequent call(s): evaluate command → returns JSON metric
-        call_count = {"n": 0}
-
-        def _side_effect(*args, **kwargs):
-            call_count["n"] += 1
-            cmd = args[0] if args else kwargs.get("args", [])
-            cmd_str = (
-                " ".join(str(c) for c in cmd) if isinstance(cmd, list) else str(cmd)
-            )
-            if "hermes" in cmd_str:
-                return MagicMock(stdout="stub hermes output", stderr=None, returncode=0)
-            # evaluate / correctness / git commands
-            if any(x in cmd_str for x in ["python3", "uv run pytest", "pip install"]):
-                import json as _json
-
-                return MagicMock(
-                    stdout=_json.dumps({"combined_score": 1.5}),
-                    stderr=None,
-                    returncode=0,
-                )
-            # git operations
-            return MagicMock(stdout="", stderr=None, returncode=0)
-
-        mock_run.side_effect = _side_effect
-
-        # run one turn — should not raise
+    with patch(
+        "subprocess.run", side_effect=_metric_side_effect("combined_score", 1.5)
+    ):
         outcome = run_turn(task_id, q)
 
     assert outcome in ("improved", "unchanged", "regressed", "crashed", "terminal"), (
         f"Unexpected outcome: {outcome!r}"
     )
-
-    # Verify a turn record was written
     history = q.turn_history(task_id)
     assert len(history) >= 1, "No turn records written after run_turn()"
 
@@ -219,7 +217,7 @@ def test_test_coverage_spec_has_executor_block() -> None:
 
 def test_circle_packing_spec_loads_cleanly() -> None:
     """loop_spec.load_spec() must parse circle_packing spec without error."""
-    from loop_spec import load_spec, MetricOptimizationSpec
+    from loop_spec import MetricOptimizationSpec, load_spec
 
     spec_path = EXAMPLES["circle_packing"]
     spec = load_spec(str(spec_path))
@@ -232,7 +230,7 @@ def test_circle_packing_spec_loads_cleanly() -> None:
 
 def test_test_coverage_spec_loads_cleanly() -> None:
     """loop_spec.load_spec() must parse test_coverage spec without error."""
-    from loop_spec import load_spec, MetricOptimizationSpec
+    from loop_spec import MetricOptimizationSpec, load_spec
 
     spec_path = EXAMPLES["test_coverage"]
     spec = load_spec(str(spec_path))
@@ -243,7 +241,7 @@ def test_test_coverage_spec_loads_cleanly() -> None:
     assert isinstance(executor, HermesExecutor)
 
 
-def test_circle_packing_one_turn(tmp_path: pytest.TempPathFactory) -> None:
+def test_circle_packing_one_turn(tmp_path: Path) -> None:
     """circle_packing: post task → run_turn → turn recorded without crash."""
     repo = _make_isolated_repo(tmp_path)
     q = _make_queue(tmp_path)
@@ -251,26 +249,9 @@ def test_circle_packing_one_turn(tmp_path: pytest.TempPathFactory) -> None:
 
     task_id = _post_example_task(q, "circle_packing", spec_path, repo)
 
-    with patch("subprocess.run") as mock_run:
-
-        def _side_effect(*args, **kwargs):
-            cmd = args[0] if args else kwargs.get("args", [])
-            cmd_str = (
-                " ".join(str(c) for c in cmd) if isinstance(cmd, list) else str(cmd)
-            )
-            if "hermes" in cmd_str:
-                return MagicMock(stdout="stub circle output", stderr=None, returncode=0)
-            if any(x in cmd_str for x in ["python3", "pip install", "uv run"]):
-                import json as _json
-
-                return MagicMock(
-                    stdout=_json.dumps({"combined_score": 0.5}),
-                    stderr=None,
-                    returncode=0,
-                )
-            return MagicMock(stdout="", stderr=None, returncode=0)
-
-        mock_run.side_effect = _side_effect
+    with patch(
+        "subprocess.run", side_effect=_metric_side_effect("combined_score", 0.5)
+    ):
         outcome = run_turn(task_id, q)
 
     assert outcome in ("improved", "unchanged", "regressed", "crashed", "terminal")
@@ -278,7 +259,7 @@ def test_circle_packing_one_turn(tmp_path: pytest.TempPathFactory) -> None:
     assert len(history) >= 1, "No turn records written for circle_packing"
 
 
-def test_test_coverage_one_turn(tmp_path: pytest.TempPathFactory) -> None:
+def test_test_coverage_one_turn(tmp_path: Path) -> None:
     """test_coverage: post task → run_turn → turn recorded without crash."""
     repo = _make_isolated_repo(tmp_path)
     q = _make_queue(tmp_path)
@@ -286,28 +267,9 @@ def test_test_coverage_one_turn(tmp_path: pytest.TempPathFactory) -> None:
 
     task_id = _post_example_task(q, "test_coverage", spec_path, repo)
 
-    with patch("subprocess.run") as mock_run:
-
-        def _side_effect(*args, **kwargs):
-            cmd = args[0] if args else kwargs.get("args", [])
-            cmd_str = (
-                " ".join(str(c) for c in cmd) if isinstance(cmd, list) else str(cmd)
-            )
-            if "hermes" in cmd_str:
-                return MagicMock(
-                    stdout="stub coverage output", stderr=None, returncode=0
-                )
-            if any(x in cmd_str for x in ["pytest", "python3", "uv run", "pip"]):
-                import json as _json
-
-                return MagicMock(
-                    stdout=_json.dumps({"coverage_percent": 85.0}),
-                    stderr=None,
-                    returncode=0,
-                )
-            return MagicMock(stdout="", stderr=None, returncode=0)
-
-        mock_run.side_effect = _side_effect
+    with patch(
+        "subprocess.run", side_effect=_metric_side_effect("coverage_percent", 85.0)
+    ):
         outcome = run_turn(task_id, q)
 
     assert outcome in ("improved", "unchanged", "regressed", "crashed", "terminal")
