@@ -65,7 +65,7 @@ def run_turn(task_id: str, queue: Queue) -> str:
         # and SATURATE_QUEUE_DIR even when run_turn() is called directly
         # (i.e. not via _launch_runner() which sets them in os.environ).
         task_id=task_id,
-        queue_dir=str(state_dir),
+        queue_dir=str(state_dir.parent),  # base_dir (contains queue.db), not state/
     )
 
     if isinstance(spec, (ClarificationSpec, TaskExecutionSpec)):
