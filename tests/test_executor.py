@@ -1,4 +1,5 @@
 """Tests for saturate.executor — Executor protocol, HermesExecutor, ShellExecutor."""
+
 from __future__ import annotations
 
 import os
@@ -8,13 +9,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from loop_spec import TurnResult
+from loop_spec import ExecutorSpec, LoopSpec, MetricOptimizationSpec, TaskExecutionSpec
 from saturate.executor import (
     Executor,
     ExecutorResult,
     HermesExecutor,
     ShellExecutor,
     TurnContext,
+    TurnResult,
     TurnSummary,
     make_executor,
 )
@@ -23,6 +25,7 @@ from saturate.executor import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_context(tmp_path: pathlib.Path, turn: int = 1) -> TurnContext:
     state = tmp_path / "state"
@@ -40,6 +43,7 @@ def _make_context(tmp_path: pathlib.Path, turn: int = 1) -> TurnContext:
 # ---------------------------------------------------------------------------
 # Dataclass field tests
 # ---------------------------------------------------------------------------
+
 
 def test_turn_context_fields() -> None:
     summary = TurnSummary(turn_n=1, outcome="improved", value=0.9)
@@ -81,6 +85,7 @@ def test_turn_summary_fields() -> None:
 # Executor Protocol structural check
 # ---------------------------------------------------------------------------
 
+
 def test_executor_protocol_structural() -> None:
     """HermesExecutor and ShellExecutor must satisfy the Executor protocol."""
     assert isinstance(HermesExecutor(profile="forge"), Executor)
@@ -91,11 +96,12 @@ def test_executor_protocol_structural() -> None:
 # ShellExecutor tests
 # ---------------------------------------------------------------------------
 
+
 def test_shell_executor_writes_env(tmp_path: pathlib.Path) -> None:
     """ShellExecutor sets SATURATE_GOAL in env; script can write hypothesis.md."""
     script = tmp_path / "run.sh"
     script.write_text(
-        '#!/usr/bin/env bash\n'
+        "#!/usr/bin/env bash\n"
         'echo "$SATURATE_GOAL" > "$SATURATE_STATE_PATH/hypothesis.md"\n'
     )
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
@@ -114,7 +120,7 @@ def test_shell_executor_writes_env(tmp_path: pathlib.Path) -> None:
 def test_shell_executor_creates_fallback(tmp_path: pathlib.Path) -> None:
     """When the command writes nothing, ShellExecutor creates a fallback hypothesis.md."""
     ctx = _make_context(tmp_path)
-    exe = ShellExecutor(command="true")   # does nothing
+    exe = ShellExecutor(command="true")  # does nothing
 
     result = exe.execute_turn({"goal": "x"}, {}, ctx)
 
@@ -134,10 +140,7 @@ def test_shell_executor_passes_all_saturate_vars(tmp_path: pathlib.Path) -> None
         state_path=str(tmp_path / "state"),
         output_path=str(tmp_path / "out"),
     )
-    script = (
-        f"env | grep SATURATE_ > {captured} ; "
-        f"mkdir -p {ctx.state_path}"
-    )
+    script = f"env | grep SATURATE_ > {captured} ; mkdir -p {ctx.state_path}"
     ShellExecutor(command=script).execute_turn({"goal": "go", "kind": "opt"}, {}, ctx)
 
     env_text = captured.read_text()
@@ -150,7 +153,7 @@ def test_shell_executor_passes_all_saturate_vars(tmp_path: pathlib.Path) -> None
 def test_shell_executor_does_not_raise_on_nonzero_exit(tmp_path: pathlib.Path) -> None:
     """ShellExecutor uses check=False — a failing command should not raise."""
     ctx = _make_context(tmp_path)
-    exe = ShellExecutor(command="exit 1")   # shell exits non-zero
+    exe = ShellExecutor(command="exit 1")  # shell exits non-zero
     # Should not raise
     result = exe.execute_turn({}, {}, ctx)
     assert result.hypothesis_path.endswith("hypothesis.md")
@@ -160,8 +163,10 @@ def test_shell_executor_does_not_raise_on_nonzero_exit(tmp_path: pathlib.Path) -
 # make_executor factory tests
 # ---------------------------------------------------------------------------
 
+
 def test_make_executor_hermes() -> None:
     from loop_spec import ExecutorSpec
+
     exe = make_executor(ExecutorSpec(type="hermes", profile="forge"))
     assert isinstance(exe, HermesExecutor)
     assert exe.profile == "forge"
@@ -169,6 +174,7 @@ def test_make_executor_hermes() -> None:
 
 def test_make_executor_shell() -> None:
     from loop_spec import ExecutorSpec
+
     exe = make_executor(ExecutorSpec(type="shell", command="echo hi"))
     assert isinstance(exe, ShellExecutor)
     assert exe.command == "echo hi"
@@ -183,6 +189,7 @@ def test_make_executor_default_is_shell() -> None:
 def test_make_executor_unknown() -> None:
     from loop_spec import ExecutorSpec
     from pydantic import ValidationError
+
     # loop-spec now validates executor fields at construction time --
     # ExecutorSpec(type="http") raises ValidationError because url is required.
     # That is the correct behavior: malformed specs never reach make_executor.
@@ -193,6 +200,7 @@ def test_make_executor_unknown() -> None:
 # ---------------------------------------------------------------------------
 # HermesExecutor._build_message tests
 # ---------------------------------------------------------------------------
+
 
 def test_hermes_builds_message_contains_goal() -> None:
     exe = HermesExecutor(profile="forge")
@@ -207,7 +215,7 @@ def test_hermes_builds_message_contains_goal() -> None:
     )
     msg = exe._build_message(spec, ctx)
     assert "reduce latency" in msg
-    assert "4" in msg   # turn number
+    assert "4" in msg  # turn number
 
 
 def test_hermes_builds_message_contains_turn_number() -> None:
@@ -263,6 +271,7 @@ def test_hermes_builds_message_no_recent_turns_shows_none_yet() -> None:
 # HermesExecutor.execute_turn — mock the CLI call
 # ---------------------------------------------------------------------------
 
+
 def test_hermes_execute_turn_writes_task_message(tmp_path: pathlib.Path) -> None:
     """execute_turn should write task_message.md before calling the CLI."""
     ctx = _make_context(tmp_path)
@@ -278,7 +287,9 @@ def test_hermes_execute_turn_writes_task_message(tmp_path: pathlib.Path) -> None
     assert "my goal" in msg_path.read_text()
 
 
-def test_hermes_execute_turn_fallback_when_no_hypothesis(tmp_path: pathlib.Path) -> None:
+def test_hermes_execute_turn_fallback_when_no_hypothesis(
+    tmp_path: pathlib.Path,
+) -> None:
     """If the hermes agent does not write hypothesis.md, fall back to stdout."""
     ctx = _make_context(tmp_path)
     spec = {"goal": "test goal"}
@@ -308,12 +319,16 @@ def test_hermes_execute_turn_uses_existing_hypothesis(tmp_path: pathlib.Path) ->
         exe = HermesExecutor(profile="test-profile")
         result = exe.execute_turn(spec, {}, ctx)
 
-    assert pathlib.Path(result.hypothesis_path).read_text() == "agent-written hypothesis content"
+    assert (
+        pathlib.Path(result.hypothesis_path).read_text()
+        == "agent-written hypothesis content"
+    )
 
 
 def test_hermes_execute_turn_env_contains_saturate_task(tmp_path: pathlib.Path) -> None:
     """execute_turn must pass SATURATE_TASK_ID (and SATURATE_TASK) into the subprocess env."""
     import os as _os
+
     ctx = _make_context(tmp_path)
     spec = {"goal": "env check goal", "kind": "metric-optimization"}
 

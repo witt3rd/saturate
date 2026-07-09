@@ -61,6 +61,18 @@ def run_turn(task_id: str, queue: Queue) -> str:
         stagnation_n=state.get("stagnation_n", 0),
         state_path=task_state_path,
         output_path=spec.output_dir,
+        # Provide task identity so HermesExecutor can inject SATURATE_TASK_ID
+        # and SATURATE_QUEUE_DIR even when run_turn() is called directly
+        # (i.e. not via _launch_runner() which sets them in os.environ).
+        task_id=task_id,
+        # Derive queue_dir from the DB path when available — correct even when
+        # db_path is outside base_dir. Falls back to state_dir.parent for
+        # file-based queues that have no _db_path attribute.
+        queue_dir=str(
+            pathlib.Path(queue._db_path).parent  # type: ignore[union-attr]
+            if hasattr(queue, "_db_path")
+            else state_dir.parent
+        ),
     )
 
     if isinstance(spec, (ClarificationSpec, TaskExecutionSpec)):

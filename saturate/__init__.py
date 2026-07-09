@@ -7,7 +7,6 @@ from loop_spec import (
     SelectionSpec,
     TaskExecutionSpec,
     TerminalConditions,
-    TurnResult,
     load_spec,
 )
 
@@ -17,6 +16,7 @@ from saturate.executor import (
     HermesExecutor,
     ShellExecutor,
     TurnContext,
+    TurnResult,
     TurnSummary,
     make_executor,
 )

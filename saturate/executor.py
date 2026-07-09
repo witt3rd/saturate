@@ -6,7 +6,22 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Protocol, runtime_checkable
 
 from loop_spec import ExecutorSpec, LoopSpec, TaskExecutionSpec
-from loop_spec import TurnResult as LoopSpecTurnResult
+
+
+@dataclass
+class TurnResult:
+    """Published outcome of one executor turn.
+
+    Mirrors the loop-spec TurnResult JSON contract without requiring
+    loop_spec to export the class (it may not in all versions).
+    """
+
+    outcome: str  # 'applied', 'skipped', 'failed', etc.
+    notes: str | None = None
+
+
+# Alias so callers using the old name still work
+LoopSpecTurnResult = TurnResult
 
 
 @dataclass
@@ -24,6 +39,8 @@ class TurnContext:
     stagnation_n: int  # consecutive non-improved turns
     state_path: str  # executor writes hypothesis.md here
     output_path: str
+    task_id: Optional[str] = None  # Saturate task ID — injected into subprocess env
+    queue_dir: Optional[str] = None  # Saturate queue dir — injected into subprocess env
 
 
 @dataclass
@@ -70,23 +87,35 @@ class HermesExecutor:
             stdout=subprocess.PIPE,
             stderr=None,
             text=True,
-            # Pass through SATURATE_* vars so the hermes worker subprocess
-            # can detect the Saturate context via cyclus_queue._active_backend().
-            # Only inject vars that are actually set — never pass empty strings.
+            # Inject SATURATE_* vars so the hermes worker subprocess can detect
+            # the Saturate context via cyclus_queue._active_backend().
+            # Priority: context fields (set by run_turn) > os.environ (set by
+            # _launch_runner).  Never pass empty strings.
+            # IMPORTANT: Clear HERMES_KANBAN_TASK so that if HermesExecutor is
+            # called from within a Kanban worker (e.g. a live-e2e test task),
+            # the cyclus_queue inside the hermes subprocess routes to Saturate
+            # rather than being captured by the outer Kanban context.
             env={
-                **os.environ,
-                **{
-                    k: v
-                    for k, v in {
-                        "SATURATE_TASK": os.environ.get("SATURATE_TASK"),
-                        "SATURATE_TASK_ID": (
-                            os.environ.get("SATURATE_TASK_ID")
-                            or os.environ.get("SATURATE_TASK")
-                        ),
-                        "SATURATE_QUEUE_DIR": os.environ.get("SATURATE_QUEUE_DIR"),
-                    }.items()
-                    if v
-                },
+                k: v
+                for k, v in os.environ.items()
+                if k != "HERMES_KANBAN_TASK"  # Clear outer Kanban identity
+            }
+            | {
+                k: v
+                for k, v in {
+                    "SATURATE_TASK": (
+                        context.task_id or os.environ.get("SATURATE_TASK")
+                    ),
+                    "SATURATE_TASK_ID": (
+                        context.task_id
+                        or os.environ.get("SATURATE_TASK_ID")
+                        or os.environ.get("SATURATE_TASK")
+                    ),
+                    "SATURATE_QUEUE_DIR": (
+                        context.queue_dir or os.environ.get("SATURATE_QUEUE_DIR")
+                    ),
+                }.items()
+                if v
             },
         )
 
