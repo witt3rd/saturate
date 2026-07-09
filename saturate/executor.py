@@ -6,7 +6,22 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Protocol, runtime_checkable
 
 from loop_spec import ExecutorSpec, LoopSpec, TaskExecutionSpec
-from loop_spec import TurnResult as LoopSpecTurnResult
+
+
+@dataclass
+class TurnResult:
+    """Published outcome of one executor turn.
+
+    Mirrors the loop-spec TurnResult JSON contract without requiring
+    loop_spec to export the class (it may not in all versions).
+    """
+
+    outcome: str  # 'applied', 'skipped', 'failed', etc.
+    notes: str | None = None
+
+
+# Alias so callers using the old name still work
+LoopSpecTurnResult = TurnResult
 
 
 @dataclass
