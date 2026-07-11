@@ -83,6 +83,22 @@ or producer written against the four-operation interface (`post`, `claim`,
 The moment a skill or worker special-cases a backend, this article has
 been violated.
 
+### VI — *(reserved)* Node conformance
+
+**Not yet an article — tracked, not written.** [`saturate#9`](https://github.com/witt3rd/saturate/issues/9)
+names a real gap in the same family as Article III: Saturate verifies the
+*schema* contract before running a spec, but nothing verifies that a node
+is actually *capable* of running what gets dispatched to it — GPU/hardware
+presence, runtime/dependency environment, driver compatibility. A real
+finetuning run on gb10 crashed on a missing Python package that nothing
+checked for before dispatch.
+
+This slot stays empty until #9 lands a fix. Every article above was
+extracted from an incident that happened *and was closed* — writing this
+one before the fix exists would violate that same discipline applied to
+the act of writing doctrine itself. When #9 closes, this section gets
+written from what the fix actually established.
+
 ## The refusals
 
 **Not a workflow orchestrator.** Temporal, Airflow, Prefect manage
