@@ -140,6 +140,10 @@ Absolute local paths are rejected. The spec is machine-agnostic.
   (`crashed ≠ regressed` — never contaminates the baseline)
 - **Networking** — Tailscale mesh across heterogeneous nodes
 
+→ [DOCTRINE.md](DOCTRINE.md) — the founding claim: isolation is what makes
+  a fabric a fabric, not a participant
+→ [PRINCIPLES.md](PRINCIPLES.md) — system-design principles descending from
+  doctrine; the ralplan/design-review frame
 → [ARCHITECTURE.md](ARCHITECTURE.md) — components, loop taxonomy, design decisions
 
 ---
