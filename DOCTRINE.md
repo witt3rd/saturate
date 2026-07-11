@@ -5,7 +5,7 @@
 > Doctrine rarely changes; when a design decision contradicts it, the design
 > is wrong, not the doctrine.
 >
-> Forged at the bench. Donald 🧙‍♂️ + Forge ⚒️, 2026-07.
+> Forged at the bench. Donald + Forge, 2026-07.
 
 ## The founding claim
 
@@ -20,8 +20,8 @@ running impartially. The fabric cannot be allowed to.
 
 This is not a preference for tidiness. It is the property that makes
 "distributed" and "fleet" and "self-directing" mean anything at all — a
-fabric that leaks itself into its workers cannot be trusted to run a
-hundred of them unattended.
+fabric that leaks itself into its workers cannot be trusted to run
+hundreds of them unattended.
 
 ## The claim unfolds
 

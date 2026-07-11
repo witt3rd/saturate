@@ -143,7 +143,8 @@ Absolute local paths are rejected. The spec is machine-agnostic.
 → [DOCTRINE.md](DOCTRINE.md) — the founding claim: isolation is what makes
   a fabric a fabric, not a participant
 → [PRINCIPLES.md](PRINCIPLES.md) — system-design principles descending from
-  doctrine; the ralplan/design-review frame
+  doctrine; read alongside design review and ralplan (Planner/Architect/
+  Critic deliberation, see `cyclus-plan` in hermes-cyclus)
 → [ARCHITECTURE.md](ARCHITECTURE.md) — components, loop taxonomy, design decisions
 
 ---

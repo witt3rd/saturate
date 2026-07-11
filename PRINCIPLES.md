@@ -2,8 +2,10 @@
 
 > System-design principles. They **descend from `DOCTRINE.md`** — each names
 > the article it compiles from, so the descent is visible and checkable.
-> Include this file in every design review and every ralplan run on this
-> repo. A proposal that crosses a principle is wrong until the principle
+> Include this file in every design review and every ralplan run (the
+> Planner/Architect/Critic deliberation pass — see `cyclus-plan` in
+> hermes-cyclus) on this repo. A proposal that crosses a principle is
+> wrong until the principle
 > itself is rectified; a proposal that crosses *doctrine* is wrong, full stop.
 >
 > These are the ground, not a checklist — the place they live is the *next
@@ -13,7 +15,7 @@
 ## P1 — Git operations are always scoped to an explicit target, never ambient cwd
 
 *(descends from I — Filesystem isolation.)* Every git operation the runner
-performs (`add`, `commit`, `checkout`, revert) takes an explicit working
+performs (`add`, `commit`, `checkout`, `revert`) takes an explicit working
 directory: the cloned worktree if `spec.repo` is set, or a no-op if it is
 not. There is no code path that walks up from the process's current working
 directory to find *a* git root and operate on whatever it finds. If a
@@ -124,7 +126,7 @@ discovered instance, while sibling call sites carry the identical bug.
 
 ## P9 — loop-spec is a shared contract; Saturate proposes, never forks
 
-*(descends from the refusal — "not the owner of the loop spec.") When
+*(descends from the refusal — "not the owner of the loop spec.")* When
 Saturate needs a capability the current schema doesn't have (`repo` as a
 git URL, `BudgetSpec`, the `human` executor type), the field is proposed as
 a loop-spec PR first — reviewed, merged, released — and Saturate then
@@ -139,4 +141,4 @@ other — the exact drift a shared open standard exists to prevent.
 
 *Authored 2026-07-11, grounded in incidents from the PR #4, #6, #7, #8 arcs
 (git isolation, TurnResult conformance, environment leakage across nested
-Kanban/Saturate dispatch). Forge ⚒️ + Donald.*
+Kanban/Saturate dispatch). Forge + Donald.*
