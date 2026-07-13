@@ -43,8 +43,9 @@ problems with that placement:
 2. `claim()`'s contract on a mismatch was genuinely underspecified: raise
    reproduces an existing, unrelated, unhandled `BudgetExhausted` crash-loop
    bug that lives in this codebase today (confirmed: `BudgetExhausted` is
-   raised at `queue_sqlite.py:329,338` and caught nowhere in production code
-   — not in `runner_proc.py`, not in `scheduler.py`); return `None` silently
+   raised at `queue_sqlite.py:329,338`, re-raised by `claim()`, and never
+   handled further up the stack — not in `runner_proc.py`, not in
+   `scheduler.py`; it bubbles out and causes a crash-loop); return `None` silently
    discards the signal that a mismatch occurred; return the task dict with
    `done` pre-set has no shape in the current interface. Whichever an
    implementer picked by following the letter of a claim()-based design,
@@ -204,8 +205,9 @@ lower cost.
    existing `for task in pending:` block, alongside the
    `depends_on`/`earliest_start` `continue`-on-fail checks): compare
    `task.get("required_node_class")` / `task.get("num_gpus")` against the
-   process-lifetime local capability probe from step 2 above (design
-   dimension 2). On mismatch: write `UPDATE tasks SET status='done',
+   process-lifetime local capability probe (the `local_node_class` /
+   `local_gpu_count` variables set once at worker startup — see design
+   dimension 2 above for the probe spec). On mismatch: write `UPDATE tasks SET status='done',
    terminal_reason=? WHERE task_id=?` with reason
    `f"node_mismatch: needs {required_node_class or 'gpu:'+str(num_gpus)}, "
    f"local node is {local_node_class!r} with {local_gpu_count} gpu(s)"`,
@@ -269,8 +271,7 @@ lower cost.
    of requeuing.
 
 6. **Surface `terminal_reason` in `saturate status <task_id>`** (`cli.py`'s
-   `status` command): add `click.echo(f"Terminal reason:
-   {task.get('terminal_reason')}")` guarded on `status == 'done'`. The
+   `status` command): add `click.echo(f"Terminal reason: {task.get('terminal_reason')}")` guarded on `status == 'done'`. The
    command currently prints only `Status: {status}` and turn history —
    `terminal_reason` is invisible to a human running the one command
    documented for checking on a task. Without this, this whole feature's
