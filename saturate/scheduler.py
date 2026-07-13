@@ -73,7 +73,9 @@ def scheduler_tick(
     _seed_goals(queue, goals_dir)
 
     # -- 4. Dispatch ---------------------------------------------------------
-    return _dispatch(queue, now, local_node_class=local_node_class, local_gpu_count=local_gpu_count)
+    return _dispatch(
+        queue, now, local_node_class=local_node_class, local_gpu_count=local_gpu_count
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +159,19 @@ def _seed_goals(queue: "SqliteQueue", goals_dir: str) -> None:
             spec = yaml.safe_load(spec_file.read_text()) or {}
         except Exception:
             continue
+
+        # Guard: required_node_class/num_gpus must NOT be in the loop-spec YAML body.
+        # LoopSpec uses model_config={"extra": "forbid"} — these fields would cause
+        # a Pydantic ValidationError on every turn, producing misleading exhausted_retries
+        # output. Catch this at seed time with a clear, actionable error.
+        for forbidden_field in ("required_node_class", "num_gpus"):
+            if forbidden_field in spec:
+                raise ValueError(
+                    f"{spec_file}: '{forbidden_field}' must not be set inside the loop-spec "
+                    f"YAML body — loop-spec uses extra='forbid' and will fail on every turn. "
+                    f"Pass {forbidden_field!r} as a separate task field via "
+                    f"'saturate submit --{forbidden_field.replace('_', '-')} <value>' instead."
+                )
 
         queue.post(
             {

@@ -615,6 +615,22 @@ class SqliteQueue:
             conn.close()
         return [_row_to_dict(row) for row in rows]
 
+    def increment_retry_count(self, task_id: str) -> int:
+        """Increment retry_count by 1 for task_id and return the new value."""
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE tasks SET retry_count = retry_count + 1 WHERE task_id = ?",
+                (task_id,),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT retry_count FROM tasks WHERE task_id = ?", (task_id,)
+            ).fetchone()
+            return row["retry_count"] if row else 0
+        finally:
+            conn.close()
+
     def update_metadata(self, task_id: str, updates: dict) -> None:
         """Merge *updates* into the metadata JSON blob for task_id."""
         conn = self._connect()
