@@ -38,12 +38,12 @@ def _make_isolated_repo(tmp_path: Path) -> Path:
     """Minimal git repo so spec.repo is a valid file:// URL."""
     repo = tmp_path / "target_repo"
     repo.mkdir()
-    subprocess.run(["git", "init"], cwd=repo, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True)
+    subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, capture_output=True, check=True)
     (repo / "placeholder.txt").write_text("init\n")
-    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, capture_output=True, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True, check=True)
     return repo
 
 

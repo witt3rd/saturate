@@ -164,7 +164,14 @@ def start_cmd(interval, goals_dir):
 
     try:
         while True:
-            n = scheduler_tick(q, goals_dir)
+            local_node_class = os.environ.get("SATURATE_NODE_CLASS")
+            local_gpu_count = int(os.environ.get("SATURATE_GPU_COUNT", "0"))
+            n = scheduler_tick(
+                q,
+                goals_dir,
+                local_node_class=local_node_class,
+                local_gpu_count=local_gpu_count,
+            )
             if n > 0:
                 click.echo(f"[tick] Dispatched {n} task(s)")
             time.sleep(interval)

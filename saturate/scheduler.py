@@ -170,7 +170,7 @@ def _seed_goals(queue: "SqliteQueue", goals_dir: str) -> None:
                     f"{spec_file}: '{forbidden_field}' must not be set inside the loop-spec "
                     f"YAML body — loop-spec uses extra='forbid' and will fail on every turn. "
                     f"Pass {forbidden_field!r} as a separate task field via "
-                    f"'saturate submit --{forbidden_field.replace('_', '-')} <value>' instead."
+                    f"'saturate submit {'--node-class' if forbidden_field == 'required_node_class' else '--num-gpus'} <value>' instead."
                 )
 
         queue.post(
@@ -210,19 +210,32 @@ def _dispatch(
     if not pending:
         return 0
 
-    # Build set of completed task_ids for dependency checking
-    done_ids: set[str] = {
-        t["task_id"] for t in queue.list_tasks("done") if "task_id" in t
+    # Build set of successfully-completed task_ids for dependency checking.
+    # Tasks that ended in failure must NOT satisfy depends_on — a child should
+    # not run if its parent hit node_mismatch, exhausted_retries, exhausted, or
+    # was cancelled. Use a denylist (not allowlist) so future terminal reasons
+    # satisfy depends_on by default without requiring changes here.
+    _FAILURE_REASONS = {"node_mismatch", "exhausted_retries", "exhausted", "cancelled"}
+
+    def _is_failure_reason(reason: str | None) -> bool:
+        if reason is None:
+            return False
+        return any(reason.startswith(f) for f in _FAILURE_REASONS)
+
+    success_ids: set[str] = {
+        t["task_id"]
+        for t in queue.list_tasks("done")
+        if "task_id" in t and not _is_failure_reason(t.get("terminal_reason"))
     }
 
     # Filter eligible tasks
     eligible = []
     for task in pending:
-        # depends_on: all must be done
+        # depends_on: all must have succeeded (not just done)
         depends_on = task.get("depends_on") or []
         if isinstance(depends_on, str):
             depends_on = [depends_on]
-        if any(dep not in done_ids for dep in depends_on):
+        if any(dep not in success_ids for dep in depends_on):
             continue
 
         # earliest_start: must have passed
@@ -239,7 +252,10 @@ def _dispatch(
 
         # node-class / GPU eligibility gate
         required_node_class = task.get("required_node_class")
-        num_gpus = float(task.get("num_gpus") or 0.0)
+        try:
+            num_gpus = float(task.get("num_gpus") or 0.0)
+        except (TypeError, ValueError):
+            num_gpus = 0.0  # treat unreadable requirement as no GPU needed
         node_mismatch = False
         if required_node_class and local_node_class != required_node_class:
             node_mismatch = True
