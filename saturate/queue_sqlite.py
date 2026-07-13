@@ -84,23 +84,29 @@ _TASK_COLUMNS: frozenset[str] = frozenset(
         "human_gated",
         "tokens_used",
         "cost_usd",
+        "required_node_class",
+        "num_gpus",
+        "retry_count",
     }
 )
 
 _DDL = """\
 CREATE TABLE IF NOT EXISTS tasks (
-    task_id         TEXT PRIMARY KEY,
-    name            TEXT,
-    kind            TEXT,
-    status          TEXT    NOT NULL DEFAULT 'pending',
-    spec_path       TEXT,
-    state_path      TEXT,
-    output_path     TEXT,
-    priority        INT     NOT NULL DEFAULT 50,
-    submitted_at    TEXT,
-    completed_at    TEXT,
-    terminal_reason TEXT,
-    metadata        TEXT    NOT NULL DEFAULT '{}'
+    task_id              TEXT PRIMARY KEY,
+    name                 TEXT,
+    kind                 TEXT,
+    status               TEXT    NOT NULL DEFAULT 'pending',
+    spec_path            TEXT,
+    state_path           TEXT,
+    output_path          TEXT,
+    priority             INT     NOT NULL DEFAULT 50,
+    submitted_at         TEXT,
+    completed_at         TEXT,
+    terminal_reason      TEXT,
+    required_node_class  TEXT,
+    num_gpus             REAL    NOT NULL DEFAULT 0.0,
+    retry_count          INTEGER NOT NULL DEFAULT 0,
+    metadata             TEXT    NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS turns (
@@ -201,6 +207,9 @@ class SqliteQueue:
                 "ALTER TABLE tasks ADD COLUMN human_gated INT NOT NULL DEFAULT 0",
                 "ALTER TABLE tasks ADD COLUMN tokens_used INT NOT NULL DEFAULT 0",
                 "ALTER TABLE tasks ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0.0",
+                "ALTER TABLE tasks ADD COLUMN required_node_class TEXT",
+                "ALTER TABLE tasks ADD COLUMN num_gpus REAL NOT NULL DEFAULT 0.0",
+                "ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE turns ADD COLUMN executor_outcome TEXT",
                 "ALTER TABLE turns ADD COLUMN executor_notes TEXT",
             ]:
@@ -255,8 +264,10 @@ class SqliteQueue:
                     task_id, name, kind, status,
                     spec_path, state_path, output_path,
                     priority, submitted_at, human_gated,
-                    tokens_used, cost_usd, metadata
-                ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    tokens_used, cost_usd,
+                    required_node_class, num_gpus,
+                    metadata
+                ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     task_id,
                     task.get("name"),
@@ -269,6 +280,8 @@ class SqliteQueue:
                     int(task.get("human_gated", 0)),
                     int(task.get("tokens_used", 0)),
                     float(task.get("cost_usd", 0.0)),
+                    task.get("required_node_class"),
+                    float(task.get("num_gpus", 0.0)),
                     json.dumps(metadata),
                 ),
             )

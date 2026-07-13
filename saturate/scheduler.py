@@ -29,6 +29,10 @@ if TYPE_CHECKING:
     from saturate.queue_sqlite import SqliteQueue
 
 
+def _scheduler_now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -42,7 +46,12 @@ _CPU_SATURATION: float = 80.0  # don't launch new workers above this CPU%
 # ---------------------------------------------------------------------------
 
 
-def scheduler_tick(queue: "SqliteQueue", goals_dir: str) -> int:
+def scheduler_tick(
+    queue: "SqliteQueue",
+    goals_dir: str,
+    local_node_class: "str | None" = None,
+    local_gpu_count: int = 0,
+) -> int:
     """Run one scheduler tick.  Returns number of tasks dispatched this tick.
 
     Steps
@@ -64,7 +73,7 @@ def scheduler_tick(queue: "SqliteQueue", goals_dir: str) -> int:
     _seed_goals(queue, goals_dir)
 
     # -- 4. Dispatch ---------------------------------------------------------
-    return _dispatch(queue, now)
+    return _dispatch(queue, now, local_node_class=local_node_class, local_gpu_count=local_gpu_count)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +184,12 @@ def _seed_goals(queue: "SqliteQueue", goals_dir: str) -> None:
         )
 
 
-def _dispatch(queue: "SqliteQueue", now: datetime) -> int:
+def _dispatch(
+    queue: "SqliteQueue",
+    now: datetime,
+    local_node_class: "str | None" = None,
+    local_gpu_count: int = 0,
+) -> int:
     """Dispatch eligible pending tasks, returning the count dispatched."""
     pending = queue.list_tasks("pending")
     if not pending:
@@ -207,6 +221,32 @@ def _dispatch(queue: "SqliteQueue", now: datetime) -> int:
                     continue
             except (ValueError, TypeError):
                 pass
+
+        # node-class / GPU eligibility gate
+        required_node_class = task.get("required_node_class")
+        num_gpus = float(task.get("num_gpus") or 0.0)
+        node_mismatch = False
+        if required_node_class and local_node_class != required_node_class:
+            node_mismatch = True
+        if num_gpus > 0 and local_gpu_count < num_gpus:
+            node_mismatch = True
+        if node_mismatch:
+            task_id = task.get("task_id")
+            if task_id:
+                reason = (
+                    f"node_mismatch: needs {required_node_class or 'gpu:' + str(num_gpus)}, "
+                    f"local node is {local_node_class!r} with {local_gpu_count} gpu(s)"
+                )
+                conn = queue._connect()
+                try:
+                    conn.execute(
+                        "UPDATE tasks SET status='done', terminal_reason=?, completed_at=? WHERE task_id=?",
+                        (reason, _scheduler_now_iso(), task_id),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            continue
 
         eligible.append(task)
 
