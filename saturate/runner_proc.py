@@ -81,11 +81,31 @@ def main() -> int:
     except Exception as exc:
         traceback.print_exc()
         print(f"runner_proc: {task_id} crashed: {exc}", file=sys.stderr)
-        # Requeue so the scheduler can retry
+        # Increment retry_count; if >= max_retries, mark exhausted instead of requeuing.
+        # NOTE: retry_count is per-task-serial — only one runner_proc holds a given
+        # task_id at a time (BEGIN EXCLUSIVE in claim()), so incrementing here is safe
+        # without the queue-level enforcement budget requires. See DOCTRINE.md P5.
         try:
-            queue.requeue(task_id)
+            task = queue.get(task_id)
+            max_retries = int((task or {}).get("max_retries", 3))
+            retry_count = queue.increment_retry_count(task_id)
+            if retry_count >= max_retries:
+                queue.complete(
+                    task_id,
+                    {"terminal_reason": f"exhausted_retries: {exc}"},
+                )
+                print(
+                    f"runner_proc: {task_id} exhausted retries ({retry_count}/{max_retries})",
+                    file=sys.stderr,
+                )
+            else:
+                queue.requeue(task_id)
         except Exception:
-            pass
+            # If we can't even update retry state, requeue as best-effort
+            try:
+                queue.requeue(task_id)
+            except Exception:
+                pass
         return 1
 
 

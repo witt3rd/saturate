@@ -29,6 +29,10 @@ if TYPE_CHECKING:
     from saturate.queue_sqlite import SqliteQueue
 
 
+def _scheduler_now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -42,7 +46,12 @@ _CPU_SATURATION: float = 80.0  # don't launch new workers above this CPU%
 # ---------------------------------------------------------------------------
 
 
-def scheduler_tick(queue: "SqliteQueue", goals_dir: str) -> int:
+def scheduler_tick(
+    queue: "SqliteQueue",
+    goals_dir: str,
+    local_node_class: "str | None" = None,
+    local_gpu_count: int = 0,
+) -> int:
     """Run one scheduler tick.  Returns number of tasks dispatched this tick.
 
     Steps
@@ -64,7 +73,9 @@ def scheduler_tick(queue: "SqliteQueue", goals_dir: str) -> int:
     _seed_goals(queue, goals_dir)
 
     # -- 4. Dispatch ---------------------------------------------------------
-    return _dispatch(queue, now)
+    return _dispatch(
+        queue, now, local_node_class=local_node_class, local_gpu_count=local_gpu_count
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +160,19 @@ def _seed_goals(queue: "SqliteQueue", goals_dir: str) -> None:
         except Exception:
             continue
 
+        # Guard: required_node_class/num_gpus must NOT be in the loop-spec YAML body.
+        # LoopSpec uses model_config={"extra": "forbid"} — these fields would cause
+        # a Pydantic ValidationError on every turn, producing misleading exhausted_retries
+        # output. Catch this at seed time with a clear, actionable error.
+        for forbidden_field in ("required_node_class", "num_gpus"):
+            if forbidden_field in spec:
+                raise ValueError(
+                    f"{spec_file}: '{forbidden_field}' must not be set inside the loop-spec "
+                    f"YAML body — loop-spec uses extra='forbid' and will fail on every turn. "
+                    f"Pass {forbidden_field!r} as a separate task field via "
+                    f"'saturate submit {'--node-class' if forbidden_field == 'required_node_class' else '--num-gpus'} <value>' instead."
+                )
+
         queue.post(
             {
                 "task_id": task_id,
@@ -175,25 +199,43 @@ def _seed_goals(queue: "SqliteQueue", goals_dir: str) -> None:
         )
 
 
-def _dispatch(queue: "SqliteQueue", now: datetime) -> int:
+def _dispatch(
+    queue: "SqliteQueue",
+    now: datetime,
+    local_node_class: "str | None" = None,
+    local_gpu_count: int = 0,
+) -> int:
     """Dispatch eligible pending tasks, returning the count dispatched."""
     pending = queue.list_tasks("pending")
     if not pending:
         return 0
 
-    # Build set of completed task_ids for dependency checking
-    done_ids: set[str] = {
-        t["task_id"] for t in queue.list_tasks("done") if "task_id" in t
+    # Build set of successfully-completed task_ids for dependency checking.
+    # Tasks that ended in failure must NOT satisfy depends_on — a child should
+    # not run if its parent hit node_mismatch, exhausted_retries, exhausted, or
+    # was cancelled. Use a denylist (not allowlist) so future terminal reasons
+    # satisfy depends_on by default without requiring changes here.
+    _FAILURE_REASONS = {"node_mismatch", "exhausted_retries", "exhausted", "cancelled"}
+
+    def _is_failure_reason(reason: str | None) -> bool:
+        if reason is None:
+            return False
+        return any(reason.startswith(f) for f in _FAILURE_REASONS)
+
+    success_ids: set[str] = {
+        t["task_id"]
+        for t in queue.list_tasks("done")
+        if "task_id" in t and not _is_failure_reason(t.get("terminal_reason"))
     }
 
     # Filter eligible tasks
     eligible = []
     for task in pending:
-        # depends_on: all must be done
+        # depends_on: all must have succeeded (not just done)
         depends_on = task.get("depends_on") or []
         if isinstance(depends_on, str):
             depends_on = [depends_on]
-        if any(dep not in done_ids for dep in depends_on):
+        if any(dep not in success_ids for dep in depends_on):
             continue
 
         # earliest_start: must have passed
@@ -207,6 +249,35 @@ def _dispatch(queue: "SqliteQueue", now: datetime) -> int:
                     continue
             except (ValueError, TypeError):
                 pass
+
+        # node-class / GPU eligibility gate
+        required_node_class = task.get("required_node_class")
+        try:
+            num_gpus = float(task.get("num_gpus") or 0.0)
+        except (TypeError, ValueError):
+            num_gpus = 0.0  # treat unreadable requirement as no GPU needed
+        node_mismatch = False
+        if required_node_class and local_node_class != required_node_class:
+            node_mismatch = True
+        if num_gpus > 0 and local_gpu_count < num_gpus:
+            node_mismatch = True
+        if node_mismatch:
+            task_id = task.get("task_id")
+            if task_id:
+                reason = (
+                    f"node_mismatch: needs {required_node_class or 'gpu:' + str(num_gpus)}, "
+                    f"local node is {local_node_class!r} with {local_gpu_count} gpu(s)"
+                )
+                conn = queue._connect()
+                try:
+                    conn.execute(
+                        "UPDATE tasks SET status='done', terminal_reason=?, completed_at=? WHERE task_id=?",
+                        (reason, _scheduler_now_iso(), task_id),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            continue
 
         eligible.append(task)
 

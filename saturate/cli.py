@@ -28,7 +28,11 @@ def main():
 @main.command()
 @click.argument("spec_path", type=click.Path(exists=True))
 @click.option("--output", default=None, help="Output directory for this task")
-def submit(spec_path, output):
+@click.option("--node-class", default=None, help="Required node class (e.g. GPU_4090)")
+@click.option(
+    "--num-gpus", default=0.0, type=float, help="Minimum GPUs required (default: 0)"
+)
+def submit(spec_path, output, node_class, num_gpus):
     """Submit a loop spec to the queue. Prints task_id."""
     q = get_queue()
     spec_path = os.path.abspath(spec_path)
@@ -41,6 +45,10 @@ def submit(spec_path, output):
     }
     if output:
         task["output_path"] = os.path.abspath(output)
+    if node_class:
+        task["required_node_class"] = node_class
+    if num_gpus > 0:
+        task["num_gpus"] = num_gpus
     task_id = q.post(task)
     click.echo(task_id)
 
@@ -100,6 +108,8 @@ def status(task_id):
             raise SystemExit(1)
         click.echo(f"Task: {task.get('name', task_id)}")
         click.echo(f"Status: {task.get('status', 'unknown')}")
+        if task.get("status") == "done" and task.get("terminal_reason"):
+            click.echo(f"Terminal reason: {task['terminal_reason']}")
         history = q.turn_history(task_id)
         if not history:
             click.echo("No turns yet.")
@@ -154,7 +164,14 @@ def start_cmd(interval, goals_dir):
 
     try:
         while True:
-            n = scheduler_tick(q, goals_dir)
+            local_node_class = os.environ.get("SATURATE_NODE_CLASS")
+            local_gpu_count = int(os.environ.get("SATURATE_GPU_COUNT", "0"))
+            n = scheduler_tick(
+                q,
+                goals_dir,
+                local_node_class=local_node_class,
+                local_gpu_count=local_gpu_count,
+            )
             if n > 0:
                 click.echo(f"[tick] Dispatched {n} task(s)")
             time.sleep(interval)
