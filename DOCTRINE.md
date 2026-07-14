@@ -83,21 +83,43 @@ or producer written against the four-operation interface (`post`, `claim`,
 The moment a skill or worker special-cases a backend, this article has
 been violated.
 
-### VI — *(reserved)* Node conformance
+### VI — Node conformance
 
-**Not yet an article — tracked, not written.** [`saturate#9`](https://github.com/witt3rd/saturate/issues/9)
-names a real gap in the same family as Article III: Saturate verifies the
-*schema* contract before running a spec, but nothing verifies that a node
-is actually *capable* of running what gets dispatched to it — GPU/hardware
-presence, runtime/dependency environment, driver compatibility. A real
-finetuning run on gb10 crashed on a missing Python package that nothing
-checked for before dispatch.
+**The fabric verifies that a node can run what it is about to dispatch,
+before dispatching it.** Routing work to a node is not the same as knowing
+the node can execute that work. A task that requires a GPU dispatched to a
+CPU-only node, or a training job dispatched to a node missing the Python
+packages it needs, will fail — but the failure arrives only after the
+subprocess is spawned, a turn is consumed, and the terminal output reads
+as "the hypothesis was wrong" rather than "the environment was wrong."
+Those two failure modes are indistinguishable from the outside.
 
-This slot stays empty until #9 lands a fix. Every article above was
-extracted from an incident that happened *and was closed* — writing this
-one before the fix exists would violate that same discipline applied to
-the act of writing doctrine itself. When #9 closes, this section gets
-written from what the fix actually established.
+The fix is `_dispatch()`-time: before spawning anything, compare what the
+task declares it needs (`required_node_class`, `num_gpus`) against what
+the local node actually has (`local_node_class`, `local_gpu_count`). On
+mismatch, write `done` + `terminal_reason='node_mismatch: ...'` and
+`continue` — exactly the same control-flow shape the `depends_on` gate
+one line above uses. No subprocess is spawned, no turn is consumed, and
+the terminal reason is immediately legible to a human.
+
+This article is in the same family as Article III (conformance, not
+assumption): Saturate verifies the *schema* contract at `claim()`-time;
+it now also verifies the *hardware/environment* contract at
+`_dispatch()`-time. The placement matters: a check inside `claim()` runs
+after `_launch_runner()` has already spawned the subprocess, defeating
+the purpose. A check in `_dispatch()` runs strictly before that spawn.
+
+**What this article does not close:** runtime/dependency environment
+mismatches (wrong Python packages, missing drivers at a version level
+below what node-class labels capture) are not yet checked by declaration.
+Phase 1 covers declared requirements — `required_node_class` and `num_gpus`
+that authors write explicitly. Undeclared environment assumptions (a training
+script that imports `datasets` without declaring it) require a different
+mechanism (container execution, preflight probe commands) that belongs in
+a future phase. The retry-count circuit breaker (`runner_proc.py`) is the
+blunt backstop for what slips through: a task that crashes repeatedly routes
+to `exhausted_retries` rather than requeuing forever, so the failure is at
+least bounded and legible. Extracted from `saturate#9`, closed 2026-07-13.
 
 ## The refusals
 
