@@ -1,0 +1,20 @@
+[Unit]
+Description=Nomad server (saturate distributed compute control plane)
+Documentation=https://developer.hashicorp.com/nomad/docs
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/dt/.local/bin/nomad agent -config=/home/dt/src/witt3rd/saturate/infra/nomad/server.hcl
+ExecReload=/bin/kill -HUP $MAINPID
+# SIGINT is Nomad's graceful shutdown signal; SIGTERM is a hard stop.
+KillSignal=SIGINT
+KillMode=process
+LimitNOFILE=65536
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+
+[Install]
+WantedBy=default.target
